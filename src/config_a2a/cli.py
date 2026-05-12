@@ -64,6 +64,17 @@ def main_callback(
             typer.echo(f"warning: alembic upgrade failed: {exc}", err=True)
     tasks = build_task_store(agent_config)
     runtime = AgentRuntime(agent_config, tasks=tasks)
+    if agent_config.tools.mcp_servers:
+        import asyncio
+
+        try:
+            asyncio.run(runtime.discover_tools())
+            typer.echo(
+                f"config-a2a: discovered {len(runtime.mcp.specs)} MCP tool(s) "
+                f"from {len(agent_config.tools.mcp_servers)} server(s)"
+            )
+        except Exception as exc:  # pylint: disable=broad-except
+            typer.echo(f"warning: MCP discovery failed: {exc}", err=True)
     fastapi_app = create_app(runtime)
     typer.echo(
         f"config-a2a: serving '{agent_config.name}' on http://{bind_host}:{bind_port} "

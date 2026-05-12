@@ -19,6 +19,7 @@ from config_a2a.providers.base import (
 )
 
 if TYPE_CHECKING:  # pragma: no cover
+    from config_a2a.mcp.client import McpRegistry
     from config_a2a.runtime import TaskStore
 
 
@@ -38,6 +39,7 @@ class ExecutionContext:
     system_prompt: str = ""
     history: list[ChatMessage] = field(default_factory=list)
     tools: list[ToolSpec] = field(default_factory=list)
+    mcp: "McpRegistry | None" = None
 
 
 class PatternError(Exception):

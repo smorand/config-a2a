@@ -1,0 +1,69 @@
+name: react-fs-assistant
+version: 0.1.0
+description: A ReAct agent with filesystem MCP tools and destructive-action gating.
+
+server:
+  host: 0.0.0.0
+  port: 9002
+
+persistence:
+  backend: sqlite
+  url: sqlite+aiosqlite:///./state/react-fs-assistant.db
+  run_migrations_on_start: true
+
+model:
+  provider: openai-compatible
+  model: openrouter/auto:free
+  api_key_env: OPENROUTER_API_KEY
+  base_url: https://openrouter.ai/api/v1
+  extra_headers:
+    HTTP-Referer: https://github.com/smorand/config-a2a
+    X-Title: config-a2a react-fs-assistant
+
+pattern:
+  type: react
+  max_iterations: 8
+  executor_prompt_file: prompts/react.md
+
+prompts:
+  system_file: prompts/system.md
+
+tools:
+  mcp_servers:
+    - name: fs
+      transport: stdio
+      command: npx
+      args: ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+      env: {}
+  filters:
+    exclude: []  # keep destructive tools but gate them via confirmations.
+
+confirmations:
+  destructive_hint: prompt
+  per_tool:
+    fs.delete_file: prompt
+    fs.move_file: prompt
+
+guardrails:
+  max_loops: 12
+  max_tokens: 16000
+  timeout_seconds: 180
+
+observability:
+  otel:
+    enabled: true
+    service_name: react-fs-assistant
+    exporter: jsonl
+    jsonl_path: traces/react-fs-assistant.jsonl
+
+skills:
+  - id: filesystem
+    name: Filesystem ReAct
+    description: Read, list, and (with confirmation) modify files under /tmp.
+    tags: [filesystem, react]
+    examples:
+      - "List the .md files in /tmp"
+      - "Read /tmp/notes.txt and summarise it"
+
+authentication:
+  type: none

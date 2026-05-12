@@ -11,6 +11,7 @@ from config_a2a.a2a.envelope import Message, Task, TaskStatus, text_message
 from config_a2a.a2a.sse import SseEmitter
 from config_a2a.config.models import AgentConfig
 from config_a2a.config.prompts import resolve_system_prompt
+from config_a2a.mcp.client import McpRegistry
 from config_a2a.patterns import ExecutionContext, get_runner
 from config_a2a.patterns.base import PatternError
 from config_a2a.providers.base import LlmProvider
@@ -110,13 +111,20 @@ class AgentRuntime:
         *,
         provider: LlmProvider | None = None,
         tasks: TaskStore | None = None,
+        mcp_registry: McpRegistry | None = None,
     ) -> None:
         self.config = config
         self.tasks: TaskStore = tasks or InMemoryTaskStore()
         self.provider: LlmProvider | None = provider
+        self.mcp = mcp_registry or McpRegistry()
         self._system_prompt = resolve_system_prompt(
             config.prompts.system, config.prompts.system_file, default=""
         )
+
+    async def discover_tools(self) -> None:
+        """Run once at process start to populate the MCP registry."""
+        if self.config.tools.mcp_servers:
+            await self.mcp.discover(self.config.tools.mcp_servers, self.config.tools.filters)
 
     def get_provider(self) -> LlmProvider:
         if self.provider is None:
@@ -142,6 +150,8 @@ class AgentRuntime:
             provider=self.get_provider(),
             task_store=self.tasks,
             system_prompt=self._system_prompt,
+            tools=list(self.mcp.specs),
+            mcp=self.mcp,
         )
         try:
             await runner(ctx)
