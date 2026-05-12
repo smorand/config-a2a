@@ -1,0 +1,20 @@
+name: math-subagent
+version: 0.1.0
+description: Solves arithmetic problems in one short paragraph.
+
+model:
+  provider: openai-compatible
+  model: openrouter/auto:free
+  api_key_env: OPENROUTER_API_KEY
+  base_url: https://openrouter.ai/api/v1
+
+pattern:
+  type: simple
+
+prompts:
+  system: |
+    You are a careful arithmetic assistant. Show your steps briefly, then state the final number.
+
+guardrails:
+  max_loops: 5
+  max_tokens: 4000

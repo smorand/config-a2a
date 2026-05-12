@@ -1,0 +1,49 @@
+name: handoff-router
+version: 0.1.0
+description: Routes user questions to a math sub-agent or a chat sub-agent.
+
+server:
+  host: 0.0.0.0
+  port: 9004
+
+persistence:
+  backend: sqlite
+  url: sqlite+aiosqlite:///./state/handoff-router.db
+
+model:
+  provider: openai-compatible
+  model: openrouter/auto:free
+  api_key_env: OPENROUTER_API_KEY
+  base_url: https://openrouter.ai/api/v1
+
+pattern:
+  type: handoff
+  router:
+    prompt_file: prompts/router.md
+  targets:
+    - name: math
+      description: Solve arithmetic and small symbolic problems.
+      agent_ref: ./math.yaml
+    - name: chat
+      description: Open-ended conversation, jokes, and explanations.
+      agent_ref: ./chat.yaml
+
+prompts:
+  system: |
+    You are a high-level dispatcher. Always delegate to one expert.
+
+guardrails:
+  max_loops: 20
+  max_tokens: 16000
+  max_depth: 3
+
+skills:
+  - id: dispatch
+    name: Dispatcher
+    description: Picks math or chat sub-agent.
+    examples:
+      - "What is 17 * 23?"
+      - "Tell me a joke about robots."
+
+authentication:
+  type: none

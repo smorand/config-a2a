@@ -136,6 +136,9 @@ class AgentRuntime:
             await self.provider.aclose()
 
     async def run_message(self, user_text: str, emitter: SseEmitter, task: Any) -> None:
+        from config_a2a.observability.otel import gen_ai_attributes, get_tracer
+
+        tracer = get_tracer("config-a2a.runtime")
         await emitter.emit(
             {"task": Task(id=task.id, contextId=task.context_id, status=task.status).model_dump()},
             event="task",
@@ -154,7 +157,20 @@ class AgentRuntime:
             mcp=self.mcp,
         )
         try:
-            await runner(ctx)
+            with tracer.start_as_current_span(
+                f"pattern.{self.config.pattern.type}",
+                attributes={
+                    **gen_ai_attributes(
+                        provider=self.config.model.provider,
+                        model=self.config.model.model,
+                    ),
+                    "agent.name": self.config.name,
+                    "agent.version": self.config.version,
+                    "a2a.task_id": task.id,
+                    "a2a.context_id": task.context_id,
+                },
+            ):
+                await runner(ctx)
         except PatternError as exc:
             failed = TaskStatus(
                 state="TASK_STATE_FAILED", message=text_message("ROLE_AGENT", f"pattern error: {exc}")
