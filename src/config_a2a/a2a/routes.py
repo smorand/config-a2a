@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any  # noqa: F401 — used by helper above
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -53,15 +53,22 @@ def create_router() -> APIRouter:
     async def agent_card_alias(request: Request, runtime: AgentRuntime = Depends(_runtime)) -> JSONResponse:
         return JSONResponse(build_agent_card(runtime.config, _base_url(request)))
 
+    async def _resolve_task(payload: SendMessageRequest, runtime: AgentRuntime) -> Any:
+        if payload.message.taskId:
+            existing = await runtime.tasks.get(payload.message.taskId)
+            if existing is None:
+                raise HTTPException(status_code=404, detail="taskId not found")
+            return existing
+        return await runtime.tasks.create(context_id=payload.message.contextId)
+
     @router.post("/message:send", tags=["a2a"])
     async def send_message(
         payload: SendMessageRequest, runtime: AgentRuntime = Depends(_runtime)
     ) -> JSONResponse:
-        record = await runtime.tasks.create(context_id=payload.message.contextId)
+        record = await _resolve_task(payload, runtime)
         emitter = SseEmitter()
         user_text = _user_text(payload.message)
         await runtime.tasks.append_message(record.id, payload.message)
-        # Drain the emitter inline for synchronous send.
         import asyncio
 
         async def drain() -> None:
@@ -71,13 +78,14 @@ def create_router() -> APIRouter:
         producer = asyncio.create_task(runtime.run_message(user_text, emitter, record))
         consumer = asyncio.create_task(drain())
         await asyncio.gather(producer, consumer)
-        return JSONResponse(_task_to_dict(record))
+        refreshed = await runtime.tasks.get(record.id) or record
+        return JSONResponse(_task_to_dict(refreshed))
 
     @router.post("/message:stream", tags=["a2a"])
     async def stream_message(
         payload: SendMessageRequest, runtime: AgentRuntime = Depends(_runtime)
     ) -> StreamingResponse:
-        record = await runtime.tasks.create(context_id=payload.message.contextId)
+        record = await _resolve_task(payload, runtime)
         await runtime.tasks.append_message(record.id, payload.message)
         emitter = SseEmitter()
         user_text = _user_text(payload.message)

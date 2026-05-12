@@ -11,6 +11,7 @@ import uvicorn
 from config_a2a import __version__
 from config_a2a.api import create_app
 from config_a2a.config.loader import ConfigError, load_agent_config
+from config_a2a.persistence import build_task_store, run_migrations
 from config_a2a.runtime import AgentRuntime
 
 app = typer.Typer(add_completion=False, help="Run an A2A agent defined in a YAML file.")
@@ -56,7 +57,13 @@ def main_callback(
         return
     bind_host = host or agent_config.server.host
     bind_port = port or agent_config.server.port
-    runtime = AgentRuntime(agent_config)
+    if agent_config.persistence.run_migrations_on_start:
+        try:
+            run_migrations(agent_config.persistence)
+        except Exception as exc:  # pylint: disable=broad-except
+            typer.echo(f"warning: alembic upgrade failed: {exc}", err=True)
+    tasks = build_task_store(agent_config)
+    runtime = AgentRuntime(agent_config, tasks=tasks)
     fastapi_app = create_app(runtime)
     typer.echo(
         f"config-a2a: serving '{agent_config.name}' on http://{bind_host}:{bind_port} "
