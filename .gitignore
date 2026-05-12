@@ -72,3 +72,11 @@ logs/
 # Local config overrides
 config.local.yaml
 *.local.yaml
+
+# Runtime artifacts
+state/
+traces/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
