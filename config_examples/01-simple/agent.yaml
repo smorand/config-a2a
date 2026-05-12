@@ -1,0 +1,53 @@
+name: simple-assistant
+version: 0.1.0
+description: A friendly assistant that answers in one or two sentences.
+
+server:
+  host: 0.0.0.0
+  port: 9001
+
+persistence:
+  backend: sqlite
+  url: sqlite+aiosqlite:///./state/simple-assistant.db
+  run_migrations_on_start: true
+
+model:
+  provider: openai-compatible
+  model: openrouter/auto:free
+  api_key_env: OPENROUTER_API_KEY
+  base_url: https://openrouter.ai/api/v1
+  extra_headers:
+    HTTP-Referer: https://github.com/smorand/config-a2a
+    X-Title: config-a2a simple-assistant
+
+pattern:
+  type: simple
+
+prompts:
+  system_file: prompts/system.md
+
+guardrails:
+  max_loops: 5
+  max_tokens: 8000
+  timeout_seconds: 120
+
+observability:
+  otel:
+    enabled: true
+    service_name: simple-assistant
+    exporter: jsonl
+    jsonl_path: traces/simple-assistant.jsonl
+
+skills:
+  - id: chat
+    name: Chat
+    description: Open-ended chat. Replies in one or two sentences.
+    tags: [chat]
+    input_modes: [text]
+    output_modes: [text]
+    examples:
+      - "What can you do?"
+      - "Translate 'hello' to French."
+
+authentication:
+  type: none

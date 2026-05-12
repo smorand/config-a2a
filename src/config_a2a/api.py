@@ -1,35 +1,21 @@
-"""FastAPI application exposing the A2A agent over HTTP."""
+"""FastAPI application factory."""
 
 from __future__ import annotations
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import FastAPI
 
 from config_a2a import __version__
-from config_a2a.loader import ConfigLoadError, load_agent_config
-from config_a2a.models import AgentConfig
-from config_a2a.settings import Settings, get_settings
+from config_a2a.a2a.routes import create_router
+from config_a2a.runtime import AgentRuntime
 
 
-def create_app() -> FastAPI:
-    """Application factory used by uvicorn and tests."""
+def create_app(runtime: AgentRuntime) -> FastAPI:
     app = FastAPI(
-        title="config-a2a",
-        version=__version__,
-        description="Create advanced A2A agents using YAML configuration files",
+        title=runtime.config.name,
+        version=runtime.config.version,
+        description=runtime.config.description or "A2A agent built by config-a2a",
     )
-
-    @app.get("/health", tags=["system"])
-    async def health() -> dict[str, str]:
-        return {"status": "ok", "version": __version__}
-
-    @app.get("/agent", response_model=AgentConfig, tags=["agent"])
-    async def get_agent(settings: Settings = Depends(get_settings)) -> AgentConfig:
-        try:
-            return load_agent_config(settings.config_path)
-        except ConfigLoadError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-
+    app.state.runtime = runtime
+    app.state.config_a2a_version = __version__
+    app.include_router(create_router())
     return app
-
-
-app = create_app()
