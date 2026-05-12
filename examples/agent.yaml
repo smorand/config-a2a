@@ -1,0 +1,19 @@
+name: example-agent
+version: 0.1.0
+description: An example A2A agent loaded from YAML configuration.
+skills:
+  - name: greet
+    description: Return a friendly greeting.
+    inputs:
+      name: string
+    outputs:
+      message: string
+  - name: summarize
+    description: Summarize a piece of text.
+    inputs:
+      text: string
+    outputs:
+      summary: string
+metadata:
+  author: Sebastien MORAND
+  owner: smorand
