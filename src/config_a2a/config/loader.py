@@ -34,13 +34,33 @@ def _substitute_env(value: Any) -> Any:
     return value
 
 
+_PATH_KEYS: frozenset[str] = frozenset(
+    {
+        "system_file",
+        "prompt_file",
+        "executor_prompt_file",
+        "planner_prompt_file",
+        "evaluator_prompt_file",
+        "generator_prompt_file",
+        "agent_ref",
+        "jsonl_path",
+        "credentials_path",
+    }
+)
+
+
 def _resolve_paths(value: Any, base_dir: Path) -> Any:
-    """Make every `*_file` and `agent_ref` leaf absolute against ``base_dir``."""
+    """Make every known path-leaf absolute against ``base_dir``.
+
+    Path keys live in a small, explicit allowlist so that user-supplied dict
+    keys (e.g. tool names inside ``confirmations.per_tool``) are not mistaken
+    for path leaves.
+    """
     if isinstance(value, dict):
         resolved: dict[str, Any] = {}
         for key, child in value.items():
             child = _resolve_paths(child, base_dir)
-            if isinstance(child, str) and (key.endswith("_file") or key in {"agent_ref", "jsonl_path"}):
+            if isinstance(child, str) and key in _PATH_KEYS:
                 candidate = Path(child)
                 if not candidate.is_absolute():
                     candidate = (base_dir / candidate).resolve()

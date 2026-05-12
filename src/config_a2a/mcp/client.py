@@ -14,7 +14,12 @@ from config_a2a.config.models import (
     McpStreamableHttpServer,
     ToolFilters,
 )
+from config_a2a.mcp.sse import call_tool as call_sse_tool, discover_tools as discover_sse, warn_deprecated
 from config_a2a.mcp.stdio import StdioToolDescriptor, call_tool as call_stdio_tool, discover_tools as discover_stdio
+from config_a2a.mcp.streamable_http import (
+    call_tool as call_streamable_tool,
+    discover_tools as discover_streamable,
+)
 from config_a2a.providers.base import ToolSpec
 
 log = logging.getLogger(__name__)
@@ -73,21 +78,21 @@ class McpRegistry:
         server = handle.server
         if isinstance(server, McpStdioServer):
             return await call_stdio_tool(server, handle.raw_name, arguments)
-        return {
-            "isError": True,
-            "text": f"transport '{server.transport}' not implemented yet (planned in a later iteration)",
-        }
+        if isinstance(server, McpStreamableHttpServer):
+            return await call_streamable_tool(server, handle.raw_name, arguments)
+        if isinstance(server, McpSseServer):
+            return await call_sse_tool(server, handle.raw_name, arguments)
+        return {"isError": True, "text": f"unknown transport: {server.transport}"}
 
 
 async def _discover_for(server: McpServer) -> list[StdioToolDescriptor]:
     if isinstance(server, McpStdioServer):
         return await discover_stdio(server)
-    if isinstance(server, (McpStreamableHttpServer, McpSseServer)):
-        log.warning(
-            "MCP transport '%s' not implemented yet (planned in a later iteration)",
-            server.transport,
-        )
-        return []
+    if isinstance(server, McpStreamableHttpServer):
+        return await discover_streamable(server)
+    if isinstance(server, McpSseServer):
+        warn_deprecated(server.name)
+        return await discover_sse(server)
     return []
 
 
