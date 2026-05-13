@@ -12,6 +12,7 @@ from config_a2a.a2a.sse import SseEmitter
 from config_a2a.config.models import AgentConfig
 from config_a2a.config.prompts import resolve_system_prompt
 from config_a2a.mcp.client import McpRegistry
+from config_a2a.memory import MemoryOrchestrator, build_orchestrator
 from config_a2a.patterns import ExecutionContext, get_runner
 from config_a2a.patterns.base import PatternError
 from config_a2a.providers.base import LlmProvider
@@ -112,11 +113,13 @@ class AgentRuntime:
         provider: LlmProvider | None = None,
         tasks: TaskStore | None = None,
         mcp_registry: McpRegistry | None = None,
+        memory: MemoryOrchestrator | None = None,
     ) -> None:
         self.config = config
         self.tasks: TaskStore = tasks or InMemoryTaskStore()
         self.provider: LlmProvider | None = provider
         self.mcp = mcp_registry or McpRegistry()
+        self.memory: MemoryOrchestrator = memory or MemoryOrchestrator(config, store=None)
         self._system_prompt = resolve_system_prompt(
             config.prompts.system, config.prompts.system_file, default=""
         )
@@ -135,6 +138,33 @@ class AgentRuntime:
         if self.provider is not None:
             await self.provider.aclose()
 
+    async def _harvest_if_complete(self, task_id: str, user_text: str) -> None:
+        if not self.memory.enabled:
+            return
+        record = await self.tasks.get(task_id)
+        if record is None:
+            return
+        status = getattr(record, "status", None)
+        if not status or status.state != "TASK_STATE_COMPLETED":
+            return
+        msg = status.message
+        assistant_text = ""
+        if msg and getattr(msg, "parts", None):
+            for part in msg.parts:
+                text = getattr(part, "text", None)
+                if text:
+                    assistant_text += text
+        try:
+            await self.memory.harvest(
+                user_text=user_text,
+                assistant_text=assistant_text,
+                provider=self.get_provider(),
+            )
+        except Exception as exc:  # pylint: disable=broad-except
+            import logging
+
+            logging.getLogger(__name__).warning("memory: harvest failed: %s", exc)
+
     async def run_message(self, user_text: str, emitter: SseEmitter, task: Any) -> None:
         from config_a2a.observability.otel import gen_ai_attributes, get_tracer
 
@@ -144,6 +174,14 @@ class AgentRuntime:
             event="task",
         )
         runner = get_runner(self.config.pattern.type)
+
+        # Pre-pattern hook: inject relevant long-term memory into the system prompt.
+        system_prompt = self._system_prompt
+        if self.memory.enabled and self.config.memory.long_term.read.when != "none":
+            injected = await self.memory.inject_long_term(user_text)
+            if injected:
+                system_prompt = f"{system_prompt}\n\n{injected}" if system_prompt else injected
+
         ctx = ExecutionContext(
             config=self.config,
             user_text=user_text,
@@ -152,9 +190,10 @@ class AgentRuntime:
             emitter=emitter,
             provider=self.get_provider(),
             task_store=self.tasks,
-            system_prompt=self._system_prompt,
+            system_prompt=system_prompt,
             tools=list(self.mcp.specs),
             mcp=self.mcp,
+            memory=self.memory,
         )
         try:
             with tracer.start_as_current_span(
@@ -171,6 +210,8 @@ class AgentRuntime:
                 },
             ):
                 await runner(ctx)
+            # Post-pattern hook: harvest facts on a terminal-success state.
+            await self._harvest_if_complete(task.id, user_text)
         except PatternError as exc:
             failed = TaskStatus(
                 state="TASK_STATE_FAILED", message=text_message("ROLE_AGENT", f"pattern error: {exc}")

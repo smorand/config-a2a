@@ -11,7 +11,8 @@ import uvicorn
 from config_a2a import __version__
 from config_a2a.api import create_app
 from config_a2a.config.loader import ConfigError, load_agent_config
-from config_a2a.persistence import build_task_store, run_migrations
+from config_a2a.memory import build_orchestrator
+from config_a2a.persistence import build_session_factory_for, build_task_store, run_migrations
 from config_a2a.runtime import AgentRuntime
 
 app = typer.Typer(add_completion=False, help="Run an A2A agent defined in a YAML file.")
@@ -63,7 +64,15 @@ def main_callback(
         except Exception as exc:  # pylint: disable=broad-except
             typer.echo(f"warning: alembic upgrade failed: {exc}", err=True)
     tasks = build_task_store(agent_config)
-    runtime = AgentRuntime(agent_config, tasks=tasks)
+    memory_orchestrator = None
+    if agent_config.memory.enabled:
+        backend = agent_config.memory.long_term.store.backend
+        if backend == "sqlite":
+            session_factory = build_session_factory_for(agent_config)
+            memory_orchestrator = build_orchestrator(agent_config, session_factory=session_factory)
+        else:
+            memory_orchestrator = build_orchestrator(agent_config)
+    runtime = AgentRuntime(agent_config, tasks=tasks, memory=memory_orchestrator)
     if agent_config.tools.mcp_servers:
         import asyncio
 

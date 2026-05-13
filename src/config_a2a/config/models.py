@@ -134,6 +134,50 @@ class AuthenticationConfig(_Strict):
     value_env: str | None = None
 
 
+# --- Memory ----------------------------------------------------------------
+
+
+class WorkingMemoryConfig(_Strict):
+    strategy: Literal["none", "sliding_summary"] = "none"
+    window: int = Field(default=20, ge=2, le=500)
+    summarize_every: int = Field(default=10, ge=1, le=200)
+    summary_prompt: str = (
+        "Summarise the conversation so far in 3-5 short sentences. "
+        "Preserve concrete facts (numbers, names, decisions); drop pleasantries."
+    )
+
+
+class MemoryStoreConfig(_Strict):
+    backend: Literal["sqlite", "in_memory"] = "sqlite"
+    url: str | None = None  # defaults to persistence.url
+
+
+class MemoryReadConfig(_Strict):
+    when: Literal["none", "first_turn", "every_turn"] = "first_turn"
+    scopes: list[Literal["user", "agent"]] = Field(default_factory=lambda: ["user", "agent"])
+    top_k: int = Field(default=5, ge=1, le=50)
+    max_chars: int = Field(default=1500, ge=100, le=20000)
+
+
+class MemoryWriteConfig(_Strict):
+    when: Literal["off", "after_terminal"] = "after_terminal"
+    extract_with: Literal["none", "llm"] = "llm"
+    scope: Literal["user", "agent", "infer"] = "infer"
+
+
+class LongTermMemoryConfig(_Strict):
+    store: MemoryStoreConfig = Field(default_factory=MemoryStoreConfig)
+    read: MemoryReadConfig = Field(default_factory=MemoryReadConfig)
+    write: MemoryWriteConfig = Field(default_factory=MemoryWriteConfig)
+
+
+class MemoryConfig(_Strict):
+    enabled: bool = False
+    working: WorkingMemoryConfig = Field(default_factory=WorkingMemoryConfig)
+    long_term: LongTermMemoryConfig = Field(default_factory=LongTermMemoryConfig)
+    expose_as_tools: bool = False  # opt-in Letta-style mode (future)
+
+
 # --- Pattern variants -------------------------------------------------------
 
 
@@ -286,3 +330,4 @@ class AgentConfig(_Strict):
     observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
     skills: list[SkillConfig] = Field(default_factory=list)
     authentication: AuthenticationConfig = Field(default_factory=AuthenticationConfig)
+    memory: MemoryConfig = Field(default_factory=MemoryConfig)

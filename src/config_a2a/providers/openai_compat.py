@@ -90,19 +90,29 @@ class OpenAiCompatibleProvider(LlmProvider):
             ]
         payload.update(request.extra)
 
-        try:
-            response = await self._client.post(
-                f"{self._base_url}/chat/completions",
-                json=payload,
-                headers=self._headers(),
-            )
-        except httpx.HTTPError as exc:
-            raise ProviderError(f"openai-compat transport error: {exc}") from exc
+        import asyncio
 
-        if response.status_code >= 400:
-            raise ProviderError(
-                f"openai-compat {response.status_code}: {response.text[:500]}"
-            )
+        response = None
+        for attempt in range(3):
+            try:
+                response = await self._client.post(
+                    f"{self._base_url}/chat/completions",
+                    json=payload,
+                    headers=self._headers(),
+                )
+            except httpx.HTTPError as exc:
+                raise ProviderError(f"openai-compat transport error: {exc}") from exc
+            if response.status_code == 429 and attempt < 2:
+                retry_after = response.headers.get("Retry-After")
+                delay = float(retry_after) if (retry_after or "").replace(".", "", 1).isdigit() else 2.0 * (attempt + 1)
+                await asyncio.sleep(min(delay, 20.0))
+                continue
+            break
+
+        if response is None or response.status_code >= 400:
+            text = response.text[:500] if response is not None else "no response"
+            status = response.status_code if response is not None else 0
+            raise ProviderError(f"openai-compat {status}: {text}")
         data = response.json()
         choice = (data.get("choices") or [{}])[0]
         message = choice.get("message") or {}

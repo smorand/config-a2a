@@ -31,4 +31,20 @@ def build_task_store(config: AgentConfig) -> PersistentTaskStore:
     return PersistentTaskStore(repo)
 
 
-__all__ = ["build_task_store", "run_migrations", "REPO_ROOT", "ALEMBIC_INI"]
+def build_session_factory_for(config: AgentConfig):  # noqa: ANN201 — returns async_sessionmaker
+    """Build a session factory for the agent's persistence config.
+
+    Used by the memory layer when the memory backend is `sqlite` (the default):
+    the same engine/file/schema as task state is reused.
+    """
+    engine = build_engine(config.persistence)
+    return build_session_factory(engine)
+
+
+__all__ = [
+    "ALEMBIC_INI",
+    "REPO_ROOT",
+    "build_session_factory_for",
+    "build_task_store",
+    "run_migrations",
+]

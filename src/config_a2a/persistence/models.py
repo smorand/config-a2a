@@ -73,5 +73,21 @@ class RunStepRow(Base):
     )
 
 
+class MemoryRow(Base):
+    """Cross-task memory record. Scope is `user` or `agent`."""
+
+    __tablename__ = "memory_records"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    agent_name: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    scope: Mapped[str] = mapped_column(String(16), nullable=False)
+    user_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    tags: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow, server_default=func.now()
+    )
+
+
 def _json_dumps(value: Any) -> str:
     return json.dumps(value, default=str, separators=(",", ":"), ensure_ascii=False)

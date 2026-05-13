@@ -56,3 +56,4 @@ tests/unit / tests/e2e / tests/fixtures
 * `.agent_docs/a2a-protocol.md` — the wire format `web-a2a` expects.
 * `.agent_docs/observability.md` — OTel spans, redaction rules, OTLP switch.
 * `.agent_docs/persistence.md` — schema, Alembic, Postgres vs SQLite.
+* `.agent_docs/memory.md` — `memory:` block, hook flow, store interface, extractor, scopes.

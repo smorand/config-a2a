@@ -20,6 +20,7 @@ from config_a2a.providers.base import (
 
 if TYPE_CHECKING:  # pragma: no cover
     from config_a2a.mcp.client import McpRegistry
+    from config_a2a.memory import MemoryOrchestrator
     from config_a2a.runtime import TaskStore
 
 
@@ -40,6 +41,7 @@ class ExecutionContext:
     history: list[ChatMessage] = field(default_factory=list)
     tools: list[ToolSpec] = field(default_factory=list)
     mcp: "McpRegistry | None" = None
+    memory: "MemoryOrchestrator | None" = None
 
 
 class PatternError(Exception):
@@ -91,6 +93,9 @@ async def emit_thinking(ctx: ExecutionContext, text: str) -> None:
 
 
 async def call_llm(ctx: ExecutionContext, messages: list[ChatMessage], *, tools: list[ToolSpec] | None = None) -> ChatResponse:
+    # Working-memory hook: enforce the sliding window before the call.
+    if ctx.memory is not None:
+        messages = await ctx.memory.maybe_summarise(messages, provider=ctx.provider)
     request = ChatRequest(
         messages=messages,
         tools=tools or [],

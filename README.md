@@ -135,6 +135,7 @@ See `.agent_docs/yaml-schema.md` for the per-pattern blocks and full field refer
 | `config_examples/05-orchestrate`    | `orchestrate`        | Parallel fan-out to remote A2A agents            |
 | `config_examples/06-debate`         | `debate`             | Pro / Con / Judge                                |
 | `config_examples/07-tree-of-thoughts` | `tree_of_thoughts` | Branch / evaluate / prune                        |
+| `config_examples/08-memory`         | `simple` + memory    | User-fact recall across independent contexts     |
 
 ## Development
 
