@@ -1,0 +1,73 @@
+name: coding-agent-pr-creation
+version: 0.1.0
+description: Phase 8/8 — push and open the Pull Request.
+
+server:
+  host: 0.0.0.0
+  port: 9108
+
+persistence:
+  backend: sqlite
+  url: sqlite+aiosqlite:///./state/coding-agent-pr-creation.db
+  run_migrations_on_start: true
+
+model:
+  provider: openai-compatible
+  model: qwen/qwen3.6-27b
+  api_key_env: OPENROUTER_API_KEY
+  base_url: https://openrouter.ai/api/v1
+  temperature: 0.1
+  max_output_tokens: 3000
+  extra_headers:
+    HTTP-Referer: https://github.com/smorand/config-a2a
+    X-Title: coding-agent-pr-creation
+
+pattern:
+  type: simple
+
+prompts:
+  system_file: ../prompts/08-pr-creation.md
+
+tools:
+  mcp_servers:
+    - name: fs
+      transport: stdio
+      command: npx
+      args: ["-y", "@modelcontextprotocol/server-filesystem", "."]
+    - name: git
+      transport: stdio
+      command: uvx
+      args: ["mcp-server-git", "--repository", "."]
+    # NOTE: A `gh` MCP server is REQUIRED to actually open the PR but does NOT
+    # ship with this repo. Until one is added, this phase writes the prepared
+    # PR body to `.agent_work/<ticket>/pr-body.md` and the operator runs
+    # `gh pr create --body-file <path>` manually.
+  filters:
+    exclude: ["fs.delete*", "fs.move*"]
+
+confirmations:
+  destructive_hint: auto_deny
+  per_tool:
+    "fs.write_file": auto_approve
+    "git.push": auto_approve
+
+guardrails:
+  max_loops: 10
+  max_tokens: 30000
+  timeout_seconds: 300
+
+observability:
+  otel:
+    enabled: true
+    service_name: coding-agent-pr-creation
+    exporter: jsonl
+    jsonl_path: traces/coding-agent/08-pr-creation.jsonl
+
+skills:
+  - id: pr
+    name: Pull Request creation
+    description: Push the branch and open the PR with a templated body.
+    tags: [coding, pr]
+
+authentication:
+  type: none

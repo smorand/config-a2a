@@ -1,0 +1,68 @@
+name: coding-agent-review
+version: 0.1.0
+description: Phase 7/8 — fresh-context review of the diff produced by phase 6.
+
+server:
+  host: 0.0.0.0
+  port: 9107
+
+persistence:
+  backend: sqlite
+  url: sqlite+aiosqlite:///./state/coding-agent-review.db
+  run_migrations_on_start: true
+
+model:
+  provider: openai-compatible
+  model: qwen/qwen3.6-27b
+  api_key_env: OPENROUTER_API_KEY
+  base_url: https://openrouter.ai/api/v1
+  temperature: 0.0
+  max_output_tokens: 4000
+  extra_headers:
+    HTTP-Referer: https://github.com/smorand/config-a2a
+    X-Title: coding-agent-review
+
+pattern:
+  type: simple
+
+prompts:
+  system_file: ../prompts/07-review.md
+
+tools:
+  mcp_servers:
+    - name: fs
+      transport: stdio
+      command: npx
+      args: ["-y", "@modelcontextprotocol/server-filesystem", "."]
+    - name: git
+      transport: stdio
+      command: uvx
+      args: ["mcp-server-git", "--repository", "."]
+  filters:
+    exclude: ["fs.delete*", "fs.move*", "fs.edit*", "git.commit", "git.push"]
+
+confirmations:
+  destructive_hint: auto_deny
+  per_tool:
+    "fs.write_file": auto_approve
+
+guardrails:
+  max_loops: 15
+  max_tokens: 60000
+  timeout_seconds: 600
+
+observability:
+  otel:
+    enabled: true
+    service_name: coding-agent-review
+    exporter: jsonl
+    jsonl_path: traces/coding-agent/07-review.jsonl
+
+skills:
+  - id: review
+    name: Fresh-context review
+    description: Inspect the diff and judge APPROVED or REQUEST_CHANGES.
+    tags: [coding, review]
+
+authentication:
+  type: none

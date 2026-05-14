@@ -1,0 +1,67 @@
+name: coding-agent-comprehension
+version: 0.1.0
+description: Phase 3/8 — synthesise codebase + .agent_docs/ context for the planner.
+
+server:
+  host: 0.0.0.0
+  port: 9103
+
+persistence:
+  backend: sqlite
+  url: sqlite+aiosqlite:///./state/coding-agent-comprehension.db
+  run_migrations_on_start: true
+
+model:
+  provider: openai-compatible
+  model: qwen/qwen3.6-flash
+  api_key_env: OPENROUTER_API_KEY
+  base_url: https://openrouter.ai/api/v1
+  temperature: 0.2
+  max_output_tokens: 4000
+  extra_headers:
+    HTTP-Referer: https://github.com/smorand/config-a2a
+    X-Title: coding-agent-comprehension
+
+pattern:
+  type: simple
+
+prompts:
+  system_file: ../prompts/03-comprehension.md
+
+tools:
+  mcp_servers:
+    - name: fs
+      transport: stdio
+      command: npx
+      args: ["-y", "@modelcontextprotocol/server-filesystem", "."]
+    - name: ctx7
+      transport: streamable-http
+      url: http://localhost:9000
+  filters:
+    exclude: ["fs.delete*", "fs.move*"]
+
+confirmations:
+  destructive_hint: auto_deny
+  per_tool:
+    "fs.write_file": auto_approve
+
+guardrails:
+  max_loops: 20
+  max_tokens: 80000
+  timeout_seconds: 600
+
+observability:
+  otel:
+    enabled: true
+    service_name: coding-agent-comprehension
+    exporter: jsonl
+    jsonl_path: traces/coding-agent/03-comprehension.jsonl
+
+skills:
+  - id: comprehend
+    name: Codebase comprehension
+    description: Build a context bundle (relevant files, conventions) for the planner.
+    tags: [coding, context]
+
+authentication:
+  type: none
