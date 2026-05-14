@@ -41,6 +41,7 @@ class Message(_Loose):
     role: Role
     contextId: str | None = None  # noqa: N815
     taskId: str | None = None  # noqa: N815
+    skillId: str | None = None  # noqa: N815 — wire format; selects an advertised skill
     parts: list[Part] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
 

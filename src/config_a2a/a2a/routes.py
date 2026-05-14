@@ -28,6 +28,28 @@ def _base_url_for_agent(request: Request, slug: str) -> str:
     return f"{root}/agents/{slug}"
 
 
+def _unknown_skill_response(skill_id: str) -> JSONResponse:
+    return JSONResponse(
+        status_code=400,
+        content={"error": "unknown skill", "skill_id": skill_id},
+    )
+
+
+def _validate_skill_id(payload: SendMessageRequest, runtime: AgentRuntime) -> JSONResponse | None:
+    """Validate ``message.skillId`` against the agent's declared skills.
+
+    Empty / missing ``skillId`` is accepted (default behaviour, layer-1 contract).
+    Returns a 400 ``JSONResponse`` if the id is unknown, ``None`` otherwise.
+    """
+    skill_id = payload.message.skillId
+    if not skill_id:
+        return None
+    declared = {s.id for s in runtime.config.skills}
+    if skill_id in declared:
+        return None
+    return _unknown_skill_response(skill_id)
+
+
 def _task_to_dict(record: TaskRecord) -> dict[str, Any]:
     task = Task(
         id=record.id,
@@ -96,9 +118,13 @@ def create_router(slug: str) -> APIRouter:
         payload: SendMessageRequest,
         runtime: AgentRuntime = Depends(_resolve_runtime),
     ) -> JSONResponse:
+        invalid = _validate_skill_id(payload, runtime)
+        if invalid is not None:
+            return invalid
         record = await _resolve_task(payload, runtime)
         emitter = SseEmitter()
         user_text = _user_text(payload.message)
+        skill_id = payload.message.skillId
         await runtime.tasks.append_message(record.id, payload.message)
         import asyncio
 
@@ -106,27 +132,31 @@ def create_router(slug: str) -> APIRouter:
             async for _ in emitter.stream():
                 pass
 
-        producer = asyncio.create_task(runtime.run_message(user_text, emitter, record))
+        producer = asyncio.create_task(runtime.run_message(user_text, emitter, record, skill_id=skill_id))
         consumer = asyncio.create_task(drain())
         await asyncio.gather(producer, consumer)
         refreshed = await runtime.tasks.get(record.id) or record
         return JSONResponse(_task_to_dict(refreshed))
 
-    @router.post("/message:stream", tags=["a2a"])
+    @router.post("/message:stream", tags=["a2a"], response_model=None)
     async def stream_message(
         payload: SendMessageRequest,
         runtime: AgentRuntime = Depends(_resolve_runtime),
-    ) -> StreamingResponse:
+    ) -> StreamingResponse | JSONResponse:
+        invalid = _validate_skill_id(payload, runtime)
+        if invalid is not None:
+            return invalid
         record = await _resolve_task(payload, runtime)
         await runtime.tasks.append_message(record.id, payload.message)
         emitter = SseEmitter()
         user_text = _user_text(payload.message)
+        skill_id = payload.message.skillId
 
         import asyncio
 
         async def producer() -> None:
             try:
-                await runtime.run_message(user_text, emitter, record)
+                await runtime.run_message(user_text, emitter, record, skill_id=skill_id)
             except Exception as exc:  # pylint: disable=broad-except
                 failed = TaskStatus(
                     state="TASK_STATE_FAILED",

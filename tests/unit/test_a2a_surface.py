@@ -109,3 +109,52 @@ def test_unknown_slug_returns_404(client_and_prefix: tuple[TestClient, str]) -> 
     client, _ = client_and_prefix
     response = client.get("/agents/does-not-exist/.well-known/agent-card.json")
     assert response.status_code == 404
+
+
+# --- skillId validation (layer 1) ------------------------------------------
+
+
+def test_send_message_with_valid_skill_id(client_and_prefix: tuple[TestClient, str]) -> None:
+    client, prefix = client_and_prefix
+    payload = {
+        "message": {
+            "messageId": "m-skill-ok",
+            "role": "ROLE_USER",
+            "skillId": "chat",
+            "parts": [{"text": "hello"}],
+        }
+    }
+    response = client.post(f"{prefix}/message:send", json=payload)
+    assert response.status_code == 200
+    task = response.json()
+    assert task["status"]["state"] == "TASK_STATE_COMPLETED"
+
+
+def test_send_message_with_unknown_skill_id(client_and_prefix: tuple[TestClient, str]) -> None:
+    client, prefix = client_and_prefix
+    payload = {
+        "message": {
+            "messageId": "m-skill-bad",
+            "role": "ROLE_USER",
+            "skillId": "does-not-exist",
+            "parts": [{"text": "hello"}],
+        }
+    }
+    response = client.post(f"{prefix}/message:send", json=payload)
+    assert response.status_code == 400
+    assert response.json() == {"error": "unknown skill", "skill_id": "does-not-exist"}
+
+
+def test_send_message_without_skill_id(client_and_prefix: tuple[TestClient, str]) -> None:
+    client, prefix = client_and_prefix
+    payload = {
+        "message": {
+            "messageId": "m-skill-none",
+            "role": "ROLE_USER",
+            "parts": [{"text": "hello"}],
+        }
+    }
+    response = client.post(f"{prefix}/message:send", json=payload)
+    assert response.status_code == 200
+    task = response.json()
+    assert task["status"]["state"] == "TASK_STATE_COMPLETED"

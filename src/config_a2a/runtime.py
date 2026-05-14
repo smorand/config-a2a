@@ -161,7 +161,17 @@ class AgentRuntime:
 
             logging.getLogger(__name__).warning("memory: harvest failed: %s", exc)
 
-    async def run_message(self, user_text: str, emitter: SseEmitter, task: Any) -> None:
+    async def run_message(
+        self,
+        user_text: str,
+        emitter: SseEmitter,
+        task: Any,
+        *,
+        skill_id: str | None = None,
+    ) -> None:
+        # ``skill_id`` is piped through for layer-2 (per-skill overrides). The runtime
+        # currently ignores it; validation happens at the A2A boundary.
+        del skill_id
         from config_a2a.observability.otel import gen_ai_attributes, get_tracer
 
         tracer = get_tracer("config-a2a.runtime")

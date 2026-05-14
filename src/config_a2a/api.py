@@ -31,6 +31,7 @@ from config_a2a.config.models import (
     ServerConfig,
 )
 from config_a2a.observability.otel import setup_otel
+from config_a2a.persistence import run_migrations
 from config_a2a.server import Server
 
 _AuthCheck = Callable[[Request], Awaitable[None]]
@@ -216,6 +217,39 @@ def _build_admin_router(admin: AdminConfig) -> APIRouter:
     return router
 
 
+def _run_sync(coro: Awaitable[Any]) -> Any:
+    """Drive ``coro`` to completion from a sync context.
+
+    Works whether or not a parent event loop is already running. ``asyncio.run``
+    refuses to nest, which breaks library callers (tests, REPLs, notebooks)
+    where pytest-asyncio or another framework has already opened a loop.
+    """
+    import asyncio
+    import threading
+
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)  # type: ignore[arg-type]
+    # A loop is already running on this thread: punt to a fresh thread with
+    # its own loop and block this thread on its completion.
+    result: dict[str, Any] = {}
+    error: dict[str, BaseException] = {}
+
+    def _target() -> None:
+        try:
+            result["value"] = asyncio.run(coro)  # type: ignore[arg-type]
+        except BaseException as exc:  # pragma: no cover — propagated below
+            error["exc"] = exc
+
+    thread = threading.Thread(target=_target, daemon=True)
+    thread.start()
+    thread.join()
+    if "exc" in error:
+        raise error["exc"]
+    return result.get("value")
+
+
 def create_app(server_config: ServerConfig) -> FastAPI:
     """Build the multi-agent FastAPI app and mount all configured agents.
 
@@ -223,6 +257,17 @@ def create_app(server_config: ServerConfig) -> FastAPI:
     chain. Use ``app.state.server`` for further admin operations after startup.
     """
     setup_otel(server_config)
+
+    # Run alembic before any engine touches the schema. CLI also calls this,
+    # but tests and library callers go through ``create_app`` directly, so
+    # the migration must live here too.
+    if server_config.persistence.run_migrations_on_start:
+        try:
+            run_migrations(server_config.persistence)
+        except Exception as exc:  # pylint: disable=broad-except
+            import logging
+
+            logging.getLogger(__name__).warning("alembic upgrade failed: %s", exc)
 
     app = FastAPI(
         title=server_config.name,
@@ -248,12 +293,10 @@ def create_app(server_config: ServerConfig) -> FastAPI:
     if server_config.admin.enabled:
         app.include_router(_build_admin_router(server_config.admin))
 
-    # Mount per-agent routers eagerly (synchronous startup path).
-    # Tools discovery is async — defer to a startup event if needed.
-    import asyncio
-
-    # Move agents off the config list so `Server.load_agent` can re-append
-    # without iterating a list it mutates.
+    # Mount per-agent routers eagerly. ``server.load_agent`` is async because
+    # MCP discovery may run; we therefore need a sync-friendly way to drive it.
+    # Move agents off the config list so ``load_agent`` can re-append without
+    # iterating a list it mutates.
     initial_agents = list(server.config.agents)
     server.config.agents.clear()
 
@@ -261,7 +304,7 @@ def create_app(server_config: ServerConfig) -> FastAPI:
         for agent in initial_agents:
             await server.load_agent(agent)
 
-    asyncio.run(_bootstrap())
+    _run_sync(_bootstrap())
     return app
 
 
