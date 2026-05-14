@@ -1,0 +1,56 @@
+name: plan-execute-server
+version: 0.1.0
+description: Plan & Execute agent, drafts a JSON plan then walks the steps.
+
+server:
+  host: 0.0.0.0
+  port: 9003
+
+persistence:
+  backend: sqlite
+  url: sqlite+aiosqlite:///./state/plan-execute-server.db
+  run_migrations_on_start: true
+
+observability:
+  otel:
+    enabled: true
+    service_name: plan-execute-server
+    exporter: jsonl
+    jsonl_path: traces/plan-execute-server.jsonl
+
+admin:
+  enabled: true
+
+agents:
+  - slug: planner
+    name: planner-assistant
+    description: Plan & Execute agent, drafts a JSON plan then walks the steps.
+    model:
+      provider: openai-compatible
+      model: openrouter/auto:free
+      api_key_env: OPENROUTER_API_KEY
+      base_url: https://openrouter.ai/api/v1
+      extra_headers:
+        HTTP-Referer: https://github.com/smorand/config-a2a
+        X-Title: config-a2a planner-assistant
+    pattern:
+      type: plan_execute
+      max_steps: 5
+      max_replans: 2
+      planner:
+        prompt_file: prompts/planner.md
+      executor:
+        prompt_file: prompts/executor.md
+    prompts:
+      system_file: prompts/system.md
+    guardrails:
+      max_loops: 30
+      max_tokens: 30000
+      timeout_seconds: 300
+    skills:
+      - id: planner
+        name: Plan & Execute
+        description: Decomposes a request into ordered steps and synthesises a final answer.
+        tags: [planner, multi-step]
+        examples:
+          - "Compare three approaches to building a CLI in Python."

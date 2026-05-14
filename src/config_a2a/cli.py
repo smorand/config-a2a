@@ -1,4 +1,4 @@
-"""Command-line entry point: ``agent --config FILE [--host H] [--port P]``."""
+"""CLI entry point: ``agent --config server.yaml [--host H] [--port P]``."""
 
 from __future__ import annotations
 
@@ -10,12 +10,10 @@ import uvicorn
 
 from config_a2a import __version__
 from config_a2a.api import create_app
-from config_a2a.config.loader import ConfigError, load_agent_config
-from config_a2a.memory import build_orchestrator
-from config_a2a.persistence import build_session_factory_for, build_task_store, run_migrations
-from config_a2a.runtime import AgentRuntime
+from config_a2a.config.loader import ConfigError, load_server_config
+from config_a2a.persistence import run_migrations
 
-app = typer.Typer(add_completion=False, help="Run an A2A agent defined in a YAML file.")
+app = typer.Typer(add_completion=False, help="Run a multi-agent A2A server defined in a YAML file.")
 
 
 def _version_callback(value: bool) -> None:
@@ -33,61 +31,45 @@ def main_callback(
         "-c",
         exists=True,
         readable=True,
-        help="Path to the agent YAML configuration.",
+        help="Path to the server YAML configuration.",
     ),
     host: str | None = typer.Option(None, "--host", help="Override server.host from YAML."),
     port: int | None = typer.Option(None, "--port", help="Override server.port from YAML."),
     check: bool = typer.Option(False, "--check", help="Validate the configuration and exit."),
-    show_version: bool = typer.Option(
-        False, "--version", callback=_version_callback, is_eager=True, help="Show version and exit."
-    ),  # noqa: ARG001 — handled in callback
+    show_version: bool = typer.Option(  # noqa: ARG001 — handled in callback
+        False,
+        "--version",
+        callback=_version_callback,
+        is_eager=True,
+        help="Show version and exit.",
+    ),
 ) -> None:
-    """Start the FastAPI A2A server defined by ``config``."""
+    """Start the multi-agent A2A server defined by ``config``."""
     if ctx.invoked_subcommand is not None:
         return
     if config is None:
         typer.echo("error: --config is required", err=True)
         raise typer.Exit(code=2)
     try:
-        agent_config = load_agent_config(config)
+        server_config = load_server_config(config)
     except ConfigError as exc:
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(code=2) from exc
     if check:
-        typer.echo(f"ok: {agent_config.name} v{agent_config.version} ({agent_config.pattern.type})")
+        agent_list = ", ".join(a.slug or a.name for a in server_config.agents) or "(none)"
+        typer.echo(f"ok: {server_config.name} v{server_config.version} agents=[{agent_list}]")
         return
-    bind_host = host or agent_config.server.host
-    bind_port = port or agent_config.server.port
-    if agent_config.persistence.run_migrations_on_start:
+    bind_host = host or server_config.server.host
+    bind_port = port or server_config.server.port
+    if server_config.persistence.run_migrations_on_start:
         try:
-            run_migrations(agent_config.persistence)
+            run_migrations(server_config.persistence)
         except Exception as exc:  # pylint: disable=broad-except
             typer.echo(f"warning: alembic upgrade failed: {exc}", err=True)
-    tasks = build_task_store(agent_config)
-    memory_orchestrator = None
-    if agent_config.memory.enabled:
-        backend = agent_config.memory.long_term.store.backend
-        if backend == "sqlite":
-            session_factory = build_session_factory_for(agent_config)
-            memory_orchestrator = build_orchestrator(agent_config, session_factory=session_factory)
-        else:
-            memory_orchestrator = build_orchestrator(agent_config)
-    runtime = AgentRuntime(agent_config, tasks=tasks, memory=memory_orchestrator)
-    if agent_config.tools.mcp_servers:
-        import asyncio
-
-        try:
-            asyncio.run(runtime.discover_tools())
-            typer.echo(
-                f"config-a2a: discovered {len(runtime.mcp.specs)} MCP tool(s) "
-                f"from {len(agent_config.tools.mcp_servers)} server(s)"
-            )
-        except Exception as exc:  # pylint: disable=broad-except
-            typer.echo(f"warning: MCP discovery failed: {exc}", err=True)
-    fastapi_app = create_app(runtime)
+    fastapi_app = create_app(server_config)
     typer.echo(
-        f"config-a2a: serving '{agent_config.name}' on http://{bind_host}:{bind_port} "
-        f"(pattern={agent_config.pattern.type})"
+        f"config-a2a: serving '{server_config.name}' on http://{bind_host}:{bind_port} "
+        f"agents={[a.slug for a in server_config.agents]}"
     )
     uvicorn.run(fastapi_app, host=bind_host, port=bind_port, log_level="info")
 

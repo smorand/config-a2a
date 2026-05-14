@@ -4,9 +4,21 @@ Async SQLAlchemy 2.x. The same migration runs on SQLite (default) and PostgreSQL
 
 ## Tables (see `persistence/models.py`)
 
-- `tasks` — one row per A2A task. Stores the full `status_payload`, a `pending_action` (for INPUT_REQUIRED resume), and free-form `extra`. Indexed by `context_id` and `agent_name`.
+- `tasks` — one row per A2A task. Stores the full `status_payload`, a `pending_action` (for INPUT_REQUIRED resume), and free-form `extra`. Indexed by `context_id`, `agent_slug`, and `agent_name`. `agent_slug` is the canonical filter in a multi-agent server; `agent_name` is denormalised for human inspection.
 - `messages` — ordered messages within a task. JSON `parts` and `extra` columns.
 - `run_steps` — structured trace events (`llm_call`, `tool_call`, `status_update`). Populated lazily by the runtime when the persistent store is used.
+- `memory_records` — cross-task memory; same `agent_slug` discriminator.
+
+## Multi-agent layout
+
+One server, one database. Migration `0003_multi_agent` adds the `agent_slug`
+column to `tasks` and `memory_records` (backfilled from `agent_name` for
+backward compat). Every repository query filters by `agent_slug` so agents
+cannot see each other's tasks even though they share the engine.
+
+The server engine is built once from `ServerConfig.persistence` and reused
+across all agents; an agent that needs an isolated DB sets its own
+`persistence:` block (then it gets a private engine).
 
 ## Switching backends
 

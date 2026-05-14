@@ -1,11 +1,26 @@
-"""Pydantic v2 models describing the YAML configuration of an A2A agent."""
+"""Pydantic v2 models describing the YAML configuration of a multi-agent server.
+
+A YAML file produces one ``ServerConfig`` (the FastAPI process) that owns N
+``AgentConfig`` entries, each mounted under ``/agents/<slug>``.
+"""
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+_SLUG_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+_NON_ALNUM = re.compile(r"[^a-z0-9]+")
+
+
+def slugify(value: str) -> str:
+    """Lowercase, replace runs of non-alphanumerics with ``-``, strip the edges."""
+    lowered = value.strip().lower()
+    cleaned = _NON_ALNUM.sub("-", lowered).strip("-")
+    return cleaned
 
 
 class _Strict(BaseModel):
@@ -14,14 +29,16 @@ class _Strict(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-class ServerConfig(_Strict):
+class ServerBindConfig(_Strict):
+    """Network binding for the FastAPI process."""
+
     host: str = "0.0.0.0"  # nosec B104
     port: int = Field(default=9000, ge=1, le=65535)
 
 
 class PersistenceConfig(_Strict):
     backend: Literal["sqlite", "postgresql"] = "sqlite"
-    url: str = "sqlite+aiosqlite:///./state/agent.db"
+    url: str = "sqlite+aiosqlite:///./state/server.db"
     run_migrations_on_start: bool = True
 
 
@@ -110,7 +127,7 @@ class OtelConfig(_Strict):
     enabled: bool = True
     service_name: str | None = None
     exporter: Literal["jsonl", "otlp"] = "jsonl"
-    jsonl_path: Path = Path("traces/agent.jsonl")
+    jsonl_path: Path = Path("traces/server.jsonl")
     otlp_endpoint: str | None = None
 
 
@@ -132,6 +149,36 @@ class AuthenticationConfig(_Strict):
     type: Literal["none", "bearer", "api_key"] = "none"
     header_name: str = "Authorization"
     value_env: str | None = None
+
+
+class AdminConfig(_Strict):
+    """Admin REST surface. Disabled and empty `agents` makes the server inert."""
+
+    enabled: bool = True
+    authentication: AuthenticationConfig = Field(default_factory=AuthenticationConfig)
+
+
+class CardProviderConfig(_Strict):
+    organization: str
+    url: str | None = None
+
+
+class CardCapabilitiesConfig(_Strict):
+    streaming: bool = True
+    push_notifications: bool = False
+    state_transition_history: bool = True
+
+
+class CardConfig(_Strict):
+    """Agent Card metadata: inherited from server-level, agents may override."""
+
+    provider: CardProviderConfig | None = None
+    documentation_url: str | None = None
+    icon_url: str | None = None
+    default_input_modes: list[str] | None = None
+    default_output_modes: list[str] | None = None
+    capabilities: CardCapabilitiesConfig | None = None
+    supports_authenticated_extended_card: bool | None = None
 
 
 # --- Memory ----------------------------------------------------------------
@@ -313,21 +360,133 @@ PatternConfig = Annotated[
 
 
 class AgentConfig(_Strict):
-    """Top-level configuration of one A2A agent server."""
+    """One agent mounted under ``/agents/<slug>``.
 
+    ``slug`` defaults to ``slugify(name)``. ``persistence`` and ``authentication``
+    are optional; when omitted the server-level defaults apply (the loader fills
+    them in).
+    """
+
+    slug: str | None = None
     name: str
     version: str = "0.1.0"
     description: str = ""
 
-    server: ServerConfig = Field(default_factory=ServerConfig)
-    persistence: PersistenceConfig = Field(default_factory=PersistenceConfig)
+    persistence: PersistenceConfig | None = None
+    authentication: AuthenticationConfig | None = None
+
     model: ModelConfig
     pattern: PatternConfig
     prompts: PromptsConfig = Field(default_factory=PromptsConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
     guardrails: GuardrailsConfig = Field(default_factory=GuardrailsConfig)
     confirmations: ConfirmationsConfig = Field(default_factory=ConfirmationsConfig)
-    observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
     skills: list[SkillConfig] = Field(default_factory=list)
-    authentication: AuthenticationConfig = Field(default_factory=AuthenticationConfig)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
+    card: CardConfig | None = None
+
+    @model_validator(mode="after")
+    def _slug_default_and_shape(self) -> "AgentConfig":
+        if self.slug is None:
+            candidate = slugify(self.name)
+            if not candidate:
+                raise ValueError(f"cannot derive slug from agent name {self.name!r}; set `slug:` explicitly")
+            self.slug = candidate
+        if not _SLUG_PATTERN.match(self.slug):
+            raise ValueError(f"slug {self.slug!r} must match {_SLUG_PATTERN.pattern!r}")
+        return self
+
+    @property
+    def effective_persistence(self) -> PersistenceConfig:
+        """Persistence config, defaulting to the package defaults if unset."""
+        return self.persistence if self.persistence is not None else PersistenceConfig()
+
+    @property
+    def effective_authentication(self) -> AuthenticationConfig:
+        """Authentication config, defaulting to ``type=none`` if unset."""
+        return self.authentication if self.authentication is not None else AuthenticationConfig()
+
+
+class ServerConfig(_Strict):
+    """One FastAPI process exposing N agents under ``/agents/<slug>``."""
+
+    name: str
+    version: str = "0.1.0"
+    description: str = ""
+
+    server: ServerBindConfig = Field(default_factory=ServerBindConfig)
+    persistence: PersistenceConfig = Field(default_factory=PersistenceConfig)
+    observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
+    card: CardConfig = Field(default_factory=CardConfig)
+    admin: AdminConfig = Field(default_factory=AdminConfig)
+    agents: list[AgentConfig] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _validate_agents(self) -> "ServerConfig":
+        if not self.admin.enabled and not self.agents:
+            raise ValueError(
+                "server is inert: admin.enabled=false AND agents=[]; " "enable admin or provide at least one agent"
+            )
+        seen: set[str] = set()
+        for agent in self.agents:
+            assert agent.slug is not None  # post-validator filled it
+            if agent.slug in seen:
+                raise ValueError(f"duplicate agent slug: {agent.slug!r}")
+            seen.add(agent.slug)
+            # Inherit server-level defaults when omitted on the agent.
+            if agent.persistence is None:
+                agent.persistence = self.persistence
+            if agent.authentication is None:
+                agent.authentication = AuthenticationConfig()
+        return self
+
+
+__all__ = [
+    "AdminConfig",
+    "AgentConfig",
+    "AggregatorSubConfig",
+    "AntiLoopConfig",
+    "AuthenticationConfig",
+    "CardCapabilitiesConfig",
+    "CardConfig",
+    "CardProviderConfig",
+    "ConfirmationsConfig",
+    "DebatePattern",
+    "DebaterConfig",
+    "ExecutorSubConfig",
+    "GuardrailsConfig",
+    "HandoffAuth",
+    "HandoffPattern",
+    "HandoffTarget",
+    "JudgeSubConfig",
+    "LongTermMemoryConfig",
+    "McpServer",
+    "McpSseServer",
+    "McpStdioServer",
+    "McpStreamableHttpServer",
+    "MemoryConfig",
+    "MemoryReadConfig",
+    "MemoryStoreConfig",
+    "MemoryWriteConfig",
+    "ModelConfig",
+    "ObservabilityConfig",
+    "OrchestrateAgentRef",
+    "OrchestratePattern",
+    "OtelConfig",
+    "PatternConfig",
+    "PersistenceConfig",
+    "PlanExecutePattern",
+    "PlannerSubConfig",
+    "PromptsConfig",
+    "ReactPattern",
+    "RouterSubConfig",
+    "ServerBindConfig",
+    "ServerConfig",
+    "SimplePattern",
+    "SkillConfig",
+    "ToTPattern",
+    "ToolFilters",
+    "ToolsConfig",
+    "WorkingMemoryConfig",
+    "slugify",
+]

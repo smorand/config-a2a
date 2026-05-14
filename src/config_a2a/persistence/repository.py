@@ -13,10 +13,21 @@ from config_a2a.persistence.models import MessageRow, RunStepRow, TaskRow
 
 
 class TaskRepository:
-    """Async repository for tasks, messages, and run steps."""
+    """Async repository for tasks, messages, and run steps.
 
-    def __init__(self, session_factory: async_sessionmaker, agent_name: str) -> None:
+    Each repository instance is scoped to one ``(agent_slug, agent_name)`` pair;
+    every query filters by ``agent_slug``.
+    """
+
+    def __init__(
+        self,
+        session_factory: async_sessionmaker,
+        *,
+        agent_slug: str,
+        agent_name: str,
+    ) -> None:
         self._session_factory = session_factory
+        self._agent_slug = agent_slug
         self._agent_name = agent_name
 
     async def create_task(self, *, context_id: str | None = None) -> TaskRow:
@@ -27,6 +38,7 @@ class TaskRepository:
             row = TaskRow(
                 id=task_id,
                 context_id=ctx_id,
+                agent_slug=self._agent_slug,
                 agent_name=self._agent_name,
                 state="TASK_STATE_SUBMITTED",
                 status_payload={"state": "TASK_STATE_SUBMITTED"},
@@ -40,7 +52,10 @@ class TaskRepository:
 
     async def get_task(self, task_id: str) -> TaskRow | None:
         async with self._session_factory() as session:
-            return await session.get(TaskRow, task_id)
+            row = await session.get(TaskRow, task_id)
+            if row is None or row.agent_slug != self._agent_slug:
+                return None
+            return row
 
     async def update_status(
         self,
@@ -53,7 +68,7 @@ class TaskRepository:
     ) -> None:
         async with self._session_factory.begin() as session:
             row = await session.get(TaskRow, task_id)
-            if row is None:
+            if row is None or row.agent_slug != self._agent_slug:
                 return
             row.state = state
             row.status_payload = status_payload
@@ -64,7 +79,12 @@ class TaskRepository:
                 row.pending_action = None
 
     async def append_message(
-        self, *, task_id: str, role: str, parts: list[dict[str, Any]], extra: dict[str, Any] | None = None
+        self,
+        *,
+        task_id: str,
+        role: str,
+        parts: list[dict[str, Any]],
+        extra: dict[str, Any] | None = None,
     ) -> MessageRow:
         async with self._session_factory.begin() as session:
             count = await session.scalar(
@@ -89,9 +109,7 @@ class TaskRepository:
             )
             return list(result)
 
-    async def record_step(
-        self, *, task_id: str, kind: str, payload: dict[str, Any], summary: str = ""
-    ) -> None:
+    async def record_step(self, *, task_id: str, kind: str, payload: dict[str, Any], summary: str = "") -> None:
         async with self._session_factory.begin() as session:
             session.add(RunStepRow(task_id=task_id, kind=kind, payload=payload, summary=summary))
 
@@ -99,7 +117,7 @@ class TaskRepository:
         async with self._session_factory() as session:
             result = await session.scalars(
                 select(TaskRow)
-                .where(TaskRow.agent_name == self._agent_name)
+                .where(TaskRow.agent_slug == self._agent_slug)
                 .order_by(TaskRow.created_at.desc())
                 .limit(limit)
             )

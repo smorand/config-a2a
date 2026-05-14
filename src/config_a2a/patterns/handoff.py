@@ -24,7 +24,7 @@ log = logging.getLogger(__name__)
 
 _ROUTER_INSTRUCTIONS = (
     "You route user requests to the right target agent. "
-    "Return ONLY JSON of the form {\"target\": \"<name>\"}. "
+    'Return ONLY JSON of the form {"target": "<name>"}. '
     "Pick exactly one of the listed targets."
 )
 
@@ -34,13 +34,13 @@ async def run_handoff(ctx: ExecutionContext) -> None:
     assert isinstance(pattern, HandoffPattern)
     router_prompt = resolve_prompt(pattern.router, default="You are a router.")
     targets = pattern.targets
-    target_listing = "\n".join(
-        f"- {t.name}: {t.description or '(no description)'}" for t in targets
-    )
+    target_listing = "\n".join(f"- {t.name}: {t.description or '(no description)'}" for t in targets)
 
     await emit_status(ctx, "TASK_STATE_WORKING")
     messages = [
-        ChatMessage(role="system", content=router_prompt + "\n\n" + _ROUTER_INSTRUCTIONS + "\n\nTargets:\n" + target_listing),
+        ChatMessage(
+            role="system", content=router_prompt + "\n\n" + _ROUTER_INSTRUCTIONS + "\n\nTargets:\n" + target_listing
+        ),
         ChatMessage(role="user", content=ctx.user_text),
     ]
     decision = await call_llm(ctx, messages)
@@ -133,9 +133,7 @@ def parent_with_overrides(parent: ExecutionContext, sub_config: Any) -> Executio
     """Build a child context that inherits the parent's runtime resources."""
     from config_a2a.config.prompts import resolve_system_prompt
 
-    system = resolve_system_prompt(
-        sub_config.prompts.system, sub_config.prompts.system_file, default=""
-    )
+    system = resolve_system_prompt(sub_config.prompts.system, sub_config.prompts.system_file, default="")
     return parent.__class__(  # type: ignore[call-arg]
         config=sub_config,
         user_text=parent.user_text,

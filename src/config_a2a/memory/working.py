@@ -64,9 +64,7 @@ async def _summarise(
     transcript = "\n".join(f"[{m.role}] {m.content}" for m in middle if m.content)
     user_payload = transcript
     if existing_summary:
-        user_payload = (
-            f"Earlier summary:\n{existing_summary}\n\nNew turns to fold in:\n{transcript}"
-        )
+        user_payload = f"Earlier summary:\n{existing_summary}\n\nNew turns to fold in:\n{transcript}"
     response = await provider.chat(
         ChatRequest(
             messages=[

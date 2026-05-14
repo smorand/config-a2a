@@ -1,0 +1,43 @@
+name: tot-server
+version: 0.1.0
+description: Tree of Thoughts agent, branch, evaluate, prune across depth levels.
+
+server:
+  host: 0.0.0.0
+  port: 9007
+
+persistence:
+  backend: sqlite
+  url: sqlite+aiosqlite:///./state/tot-server.db
+
+admin:
+  enabled: true
+
+agents:
+  - slug: tot
+    name: tot-explorer
+    description: Tree of Thoughts agent, branch, evaluate, prune across depth levels.
+    model:
+      provider: openai-compatible
+      model: openrouter/auto:free
+      api_key_env: OPENROUTER_API_KEY
+      base_url: https://openrouter.ai/api/v1
+    pattern:
+      type: tree_of_thoughts
+      branches: 3
+      depth: 2
+      selection: top_k
+      top_k: 2
+      generator_prompt_file: prompts/generator.md
+      evaluator_prompt_file: prompts/evaluator.md
+    prompts:
+      system: |
+        You are an explorer who reasons in branching thoughts.
+    guardrails:
+      max_loops: 30
+      max_tokens: 30000
+      timeout_seconds: 300
+    skills:
+      - id: tot
+        name: Tree of Thoughts
+        description: Branches a problem into candidate reasoning paths, scores them, and picks the best.

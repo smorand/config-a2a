@@ -70,9 +70,7 @@ async def run_react(ctx: ExecutionContext) -> None:
             break
 
         await emit_thinking(ctx, f"(iteration {iteration + 1}) calling {response.tool_calls[0].name}")
-        messages.append(
-            ChatMessage(role="assistant", content=response.content or "", tool_calls=response.tool_calls)
-        )
+        messages.append(ChatMessage(role="assistant", content=response.content or "", tool_calls=response.tool_calls))
         seen_assistant.append(response.content or "")
         for tool_call in response.tool_calls:
             handle = ctx.mcp.handles.get(tool_call.name) if ctx.mcp else None
@@ -82,8 +80,10 @@ async def run_react(ctx: ExecutionContext) -> None:
 
                 await _suspend_for_confirmation(ctx, tool_call)
                 return
-            tool_text = "(no tools wired)" if not handle else (
-                (await ctx.mcp.call(tool_call.name, tool_call.arguments)).get("text") or ""
+            tool_text = (
+                "(no tools wired)"
+                if not handle
+                else ((await ctx.mcp.call(tool_call.name, tool_call.arguments)).get("text") or "")
             )
             messages.append(
                 ChatMessage(

@@ -25,6 +25,7 @@ class TaskRow(Base):
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     context_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    agent_slug: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
     agent_name: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
     state: Mapped[str] = mapped_column(String(32), nullable=False, default="TASK_STATE_SUBMITTED")
     status_payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
@@ -79,6 +80,7 @@ class MemoryRow(Base):
     __tablename__ = "memory_records"
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    agent_slug: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
     agent_name: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
     scope: Mapped[str] = mapped_column(String(16), nullable=False)
     user_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)

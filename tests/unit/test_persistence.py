@@ -1,4 +1,4 @@
-"""Iter 3: SQLAlchemy task store + alembic migration + resume contract."""
+"""SQLAlchemy task store + alembic migration + resume contract."""
 
 from __future__ import annotations
 
@@ -10,9 +10,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from config_a2a.a2a.envelope import TaskStatus, text_message
-from config_a2a.api import create_app
-from config_a2a.config.loader import load_agent_config
-from config_a2a.config.models import AgentConfig
+from config_a2a.api import create_app_for_runtime
+from config_a2a.config.models import AgentConfig, PersistenceConfig
 from config_a2a.guardrails.confirmations import (
     confirm_metadata,
     confirm_prompt,
@@ -26,36 +25,35 @@ from config_a2a.persistence.repository import TaskRepository
 from config_a2a.persistence.store import PersistentTaskStore
 from config_a2a.providers.base import ChatRequest, ChatResponse, LlmProvider
 from config_a2a.runtime import AgentRuntime
+from tests.unit.conftest import load_single_agent
 
-EXAMPLE = Path(__file__).resolve().parents[2] / "config_examples" / "01-simple" / "agent.yaml"
 
-
-def _sqlite_config(tmp_path: Path) -> AgentConfig:
-    config = load_agent_config(EXAMPLE)
+def _sqlite_agent(tmp_path: Path) -> AgentConfig:
+    _, agent, _ = load_single_agent("01-simple")
     db_path = tmp_path / "agent.db"
-    config.persistence.url = f"sqlite+aiosqlite:///{db_path}"
-    return config
+    agent.persistence = PersistenceConfig(url=f"sqlite+aiosqlite:///{db_path}")
+    return agent
 
 
 @pytest.fixture()
-def migrated_config(tmp_path: Path) -> AgentConfig:
-    config = _sqlite_config(tmp_path)
-    run_migrations(config.persistence)
-    return config
+def migrated_agent(tmp_path: Path) -> AgentConfig:
+    agent = _sqlite_agent(tmp_path)
+    run_migrations(agent.effective_persistence)
+    return agent
 
 
 class _StubProvider(LlmProvider):
     name = "stub"
 
-    async def chat(self, request: ChatRequest) -> ChatResponse:  # noqa: D401
+    async def chat(self, request: ChatRequest) -> ChatResponse:  # noqa: ARG002
         return ChatResponse(content="ok")
 
     async def aclose(self) -> None:
         return None
 
 
-async def test_persistent_store_roundtrip(migrated_config: AgentConfig) -> None:
-    store: PersistentTaskStore = build_task_store(migrated_config)
+async def test_persistent_store_roundtrip(migrated_agent: AgentConfig) -> None:
+    store: PersistentTaskStore = build_task_store(migrated_agent)
     record = await store.create()
     assert record.state == "TASK_STATE_SUBMITTED"
     await store.append_message(record.id, text_message("ROLE_USER", "hi"))
@@ -69,16 +67,14 @@ async def test_persistent_store_roundtrip(migrated_config: AgentConfig) -> None:
     assert refreshed.state == "TASK_STATE_WORKING"
     assert refreshed.pending_action and refreshed.pending_action["tool_name"] == "fs.delete"
     assert len(refreshed.history) == 1
-    await store.update_status(
-        record.id, TaskStatus(state="TASK_STATE_COMPLETED"), clear_pending=True
-    )
+    await store.update_status(record.id, TaskStatus(state="TASK_STATE_COMPLETED"), clear_pending=True)
     again = await store.get(record.id)
     assert again is not None
     assert again.pending_action is None
 
 
-async def test_recent_tasks_limit(migrated_config: AgentConfig) -> None:
-    store = build_task_store(migrated_config)
+async def test_recent_tasks_limit(migrated_agent: AgentConfig) -> None:
+    store = build_task_store(migrated_agent)
     for _ in range(3):
         await store.create()
     recent = await store.list_recent(limit=10)
@@ -89,15 +85,15 @@ def test_alembic_migration_creates_tables(tmp_path: Path) -> None:
     db_path = tmp_path / "agent.db"
     os.environ["CONFIG_A2A_DATABASE_URL"] = f"sqlite+aiosqlite:///{db_path}"
     try:
-        config = _sqlite_config(tmp_path)
-        run_migrations(config.persistence)
-        # Tables exist if we can run a query through SQLAlchemy.
+        agent = _sqlite_agent(tmp_path)
+        run_migrations(agent.effective_persistence)
         import asyncio
 
         async def _check() -> list[str]:
-            engine = build_engine(config.persistence)
+            engine = build_engine(agent.effective_persistence)
             factory = build_session_factory(engine)
-            repo = TaskRepository(factory, agent_name=config.name)
+            assert agent.slug is not None
+            repo = TaskRepository(factory, agent_slug=agent.slug, agent_name=agent.name)
             row = await repo.create_task()
             assert row.id
             tasks = await repo.list_recent_tasks()
@@ -110,21 +106,19 @@ def test_alembic_migration_creates_tables(tmp_path: Path) -> None:
         os.environ.pop("CONFIG_A2A_DATABASE_URL", None)
 
 
-def test_resume_with_taskid_appends_message(tmp_path: Path, migrated_config: AgentConfig) -> None:
-    store = build_task_store(migrated_config)
-    runtime = AgentRuntime(migrated_config, provider=_StubProvider(), tasks=store)
-    client = TestClient(create_app(runtime))
-    # First message creates a task.
+def test_resume_with_taskid_appends_message(tmp_path: Path, migrated_agent: AgentConfig) -> None:
+    store = build_task_store(migrated_agent)
+    runtime = AgentRuntime(migrated_agent, provider=_StubProvider(), tasks=store)
+    client = TestClient(create_app_for_runtime(runtime))
+    assert migrated_agent.slug is not None
+    prefix = f"/agents/{migrated_agent.slug}"
     first = client.post(
-        "/message:send",
-        json={
-            "message": {"messageId": "m-1", "role": "ROLE_USER", "parts": [{"text": "hello"}]}
-        },
+        f"{prefix}/message:send",
+        json={"message": {"messageId": "m-1", "role": "ROLE_USER", "parts": [{"text": "hello"}]}},
     ).json()
     task_id = first["id"]
-    # Second message reuses the taskId.
     second = client.post(
-        "/message:send",
+        f"{prefix}/message:send",
         json={
             "message": {
                 "messageId": "m-2",
@@ -137,12 +131,14 @@ def test_resume_with_taskid_appends_message(tmp_path: Path, migrated_config: Age
     assert second["id"] == task_id
 
 
-def test_resume_unknown_taskid_404(migrated_config: AgentConfig) -> None:
-    store = build_task_store(migrated_config)
-    runtime = AgentRuntime(migrated_config, provider=_StubProvider(), tasks=store)
-    client = TestClient(create_app(runtime))
+def test_resume_unknown_taskid_404(migrated_agent: AgentConfig) -> None:
+    store = build_task_store(migrated_agent)
+    runtime = AgentRuntime(migrated_agent, provider=_StubProvider(), tasks=store)
+    client = TestClient(create_app_for_runtime(runtime))
+    assert migrated_agent.slug is not None
+    prefix = f"/agents/{migrated_agent.slug}"
     response = client.post(
-        "/message:send",
+        f"{prefix}/message:send",
         json={
             "message": {
                 "messageId": "m-x",
@@ -163,7 +159,6 @@ def test_confirm_metadata_shape() -> None:
         "arguments": {"path": "/tmp/x"},
         "tool_call_id": "call-2",
     }
-    # Round-trip through JSON for wire-format safety.
     assert json.loads(json.dumps(md)) == md
     prompt = confirm_prompt("fs.delete", {"path": "/tmp/x"})
     assert "fs.delete" in prompt and "path" in prompt

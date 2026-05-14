@@ -1,6 +1,9 @@
 # Observability
 
-`observability/otel.py` sets up an OpenTelemetry `TracerProvider` once per process. Off by default → set `observability.otel.enabled: true` in YAML.
+`observability/otel.py` sets up **one** OpenTelemetry `TracerProvider` per
+FastAPI process, even when the process hosts N agents. The `observability:`
+block lives at the server level. Off by default; set
+`observability.otel.enabled: true` in YAML.
 
 ## Exporters
 
@@ -26,8 +29,13 @@ Build attribute dicts with `observability.otel.gen_ai_attributes(...)`.
 
 The exporter tags every span with:
 
-- `service.name` (from YAML `observability.otel.service_name` or falls back to `config.name`),
-- `service.version` (from `config.version`),
-- `agent.pattern` (`simple`, `react`, …).
+- `service.name` (from YAML `observability.otel.service_name` or falls back to `ServerConfig.name`),
+- `service.version` (from `ServerConfig.version`).
+
+Each pattern span additionally sets:
+
+- `agent.slug` — the canonical multi-agent discriminator, useful for filtering.
+- `agent.name`, `agent.version` — denormalised human-readable labels.
+- `a2a.task_id`, `a2a.context_id`.
 
 That's enough cardinality for Datadog/Honeycomb dashboards without leaking PII (we never label by user id).

@@ -87,9 +87,7 @@ async def run_plan_execute(ctx: ExecutionContext) -> None:
     )
 
 
-async def _request_plan(
-    ctx: ExecutionContext, messages: list[ChatMessage], max_replans: int
-) -> list[dict[str, Any]]:
+async def _request_plan(ctx: ExecutionContext, messages: list[ChatMessage], max_replans: int) -> list[dict[str, Any]]:
     last_error: str = ""
     for attempt in range(max_replans + 1):
         if ctx.cancel_event.is_set():

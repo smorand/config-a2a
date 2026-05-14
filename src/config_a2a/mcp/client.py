@@ -71,6 +71,10 @@ class McpRegistry:
                     descriptor=descriptor,
                 )
 
+    async def aclose(self) -> None:
+        """Release any held resources. Current transports are connection-less."""
+        self._handles.clear()
+
     async def call(self, qualified_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         handle = self._handles.get(qualified_name)
         if handle is None:

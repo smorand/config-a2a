@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-import asyncio
 import sys
 from pathlib import Path
 
-import pytest
 
 from config_a2a.config.models import McpStdioServer, ToolFilters
 from config_a2a.mcp.client import McpRegistry

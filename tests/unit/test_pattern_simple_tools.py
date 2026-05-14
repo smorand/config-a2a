@@ -1,4 +1,4 @@
-"""Iter 4: end-to-end tool use + INPUT_REQUIRED + resume through the Simple pattern."""
+"""End-to-end tool use + INPUT_REQUIRED + resume through the Simple pattern."""
 
 from __future__ import annotations
 
@@ -10,14 +10,12 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from config_a2a.api import create_app
-from config_a2a.config.loader import load_agent_config
+from config_a2a.api import create_app_for_runtime
 from config_a2a.config.models import AgentConfig, McpStdioServer, ToolFilters
-from config_a2a.mcp.client import McpRegistry
 from config_a2a.providers.base import ChatRequest, ChatResponse, LlmProvider, TokenUsage, ToolCall
 from config_a2a.runtime import AgentRuntime
+from tests.unit.conftest import load_single_agent
 
-EXAMPLE = Path(__file__).resolve().parents[2] / "config_examples" / "01-simple" / "agent.yaml"
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "fake_mcp_server.py"
 
 
@@ -47,14 +45,17 @@ def _server_block() -> McpStdioServer:
     )
 
 
-async def _build_runtime(scripted: list[ChatResponse], *, filters: ToolFilters | None = None) -> AgentRuntime:
-    config: AgentConfig = load_agent_config(EXAMPLE)
-    config.tools.mcp_servers = [_server_block()]
+async def _build_runtime(
+    scripted: list[ChatResponse], *, filters: ToolFilters | None = None
+) -> tuple[AgentRuntime, str]:
+    _, agent, prefix = load_single_agent("01-simple")
+    cfg: AgentConfig = agent
+    cfg.tools.mcp_servers = [_server_block()]
     if filters:
-        config.tools.filters = filters
-    runtime = AgentRuntime(config, provider=_ScriptedProvider(scripted))
+        cfg.tools.filters = filters
+    runtime = AgentRuntime(cfg, provider=_ScriptedProvider(scripted))
     await runtime.discover_tools()
-    return runtime
+    return runtime, prefix
 
 
 def _final_status(body: str) -> dict[str, Any]:
@@ -76,11 +77,11 @@ async def test_tool_call_and_complete() -> None:
         ),
         ChatResponse(content="echo done", usage=TokenUsage(input_tokens=2, output_tokens=2)),
     ]
-    runtime = await _build_runtime(scripted)
-    client = TestClient(create_app(runtime))
+    runtime, prefix = await _build_runtime(scripted)
+    client = TestClient(create_app_for_runtime(runtime))
     with client.stream(
         "POST",
-        "/message:stream",
+        f"{prefix}/message:stream",
         json={"message": {"messageId": "m1", "role": "ROLE_USER", "parts": [{"text": "go"}]}},
     ) as response:
         body = "".join(response.iter_text())
@@ -98,12 +99,12 @@ async def test_destructive_tool_triggers_input_required_and_resumes() -> None:
         ),
         ChatResponse(content="all gone", usage=TokenUsage(input_tokens=2, output_tokens=2)),
     ]
-    runtime = await _build_runtime(scripted)
-    client = TestClient(create_app(runtime))
+    runtime, prefix = await _build_runtime(scripted)
+    client = TestClient(create_app_for_runtime(runtime))
 
     with client.stream(
         "POST",
-        "/message:stream",
+        f"{prefix}/message:stream",
         json={"message": {"messageId": "m1", "role": "ROLE_USER", "parts": [{"text": "wipe it"}]}},
     ) as response:
         body = "".join(response.iter_text())
@@ -113,10 +114,9 @@ async def test_destructive_tool_triggers_input_required_and_resumes() -> None:
     assert first["statusUpdate"]["metadata"]["tool_name"] == "fake.delete_file"
     task_id = first["statusUpdate"]["taskId"]
 
-    # Resume with approval.
     with client.stream(
         "POST",
-        "/message:stream",
+        f"{prefix}/message:stream",
         json={
             "message": {
                 "messageId": "m2",
@@ -131,10 +131,13 @@ async def test_destructive_tool_triggers_input_required_and_resumes() -> None:
     assert second["statusUpdate"]["status"]["state"] == "TASK_STATE_COMPLETED"
 
 
-@pytest.mark.parametrize("filters_kw,expected", [
-    (dict(include=["fake.echo"]), {"fake.echo"}),
-    (dict(exclude=["*delete*"]), {"fake.echo"}),
-])
+@pytest.mark.parametrize(
+    "filters_kw,expected",
+    [
+        (dict(include=["fake.echo"]), {"fake.echo"}),
+        (dict(exclude=["*delete*"]), {"fake.echo"}),
+    ],
+)
 async def test_filters_apply(filters_kw: dict[str, Any], expected: set[str]) -> None:
-    runtime = await _build_runtime([], filters=ToolFilters(**filters_kw))
+    runtime, _ = await _build_runtime([], filters=ToolFilters(**filters_kw))
     assert {h.spec.name for h in runtime.mcp.handles.values()} == expected

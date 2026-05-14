@@ -1,0 +1,388 @@
+name: coding-agent
+version: 0.1.0
+description: 8-phase ticket-to-PR pipeline (8 phase agents + 1 orchestrator).
+
+server:
+  host: 0.0.0.0
+  port: 9100
+
+persistence:
+  backend: sqlite
+  url: sqlite+aiosqlite:///./state/coding-agent.db
+  run_migrations_on_start: true
+
+observability:
+  otel:
+    enabled: true
+    service_name: coding-agent
+    exporter: jsonl
+    jsonl_path: traces/coding-agent.jsonl
+
+admin:
+  enabled: true
+
+agents:
+  - slug: classification
+    name: coding-agent-classification
+    description: Phase 1/8, detect the project type from the ticket and workspace.
+    model:
+      provider: openai-compatible
+      model: qwen/qwen3.5-9b
+      api_key_env: OPENROUTER_API_KEY
+      base_url: https://openrouter.ai/api/v1
+      temperature: 0.0
+      max_output_tokens: 1500
+    pattern:
+      type: simple
+    prompts:
+      system_file: prompts/01-classification.md
+    tools:
+      mcp_servers:
+        - name: fs
+          transport: stdio
+          command: npx
+          args: ["-y", "@modelcontextprotocol/server-filesystem", "."]
+        - name: git
+          transport: stdio
+          command: uvx
+          args: ["mcp-server-git", "--repository", "."]
+      filters:
+        exclude: ["fs.delete*", "fs.move*"]
+    confirmations:
+      destructive_hint: auto_deny
+      per_tool:
+        "fs.write_file": auto_approve
+    guardrails:
+      max_loops: 10
+      max_tokens: 30000
+      timeout_seconds: 300
+    skills:
+      - id: classify
+        name: Classify project
+        description: Detect project type from the ticket and workspace.
+        tags: [coding, classification]
+
+  - slug: dor
+    name: coding-agent-dor
+    description: Phase 2/8, Definition-of-Ready validation of the ticket.
+    model:
+      provider: openai-compatible
+      model: qwen/qwen3.5-9b
+      api_key_env: OPENROUTER_API_KEY
+      base_url: https://openrouter.ai/api/v1
+      temperature: 0.0
+      max_output_tokens: 1500
+    pattern:
+      type: simple
+    prompts:
+      system_file: prompts/02-dor.md
+    tools:
+      mcp_servers:
+        - name: fs
+          transport: stdio
+          command: npx
+          args: ["-y", "@modelcontextprotocol/server-filesystem", "."]
+      filters:
+        exclude: ["fs.delete*", "fs.move*"]
+    confirmations:
+      destructive_hint: auto_deny
+      per_tool:
+        "fs.write_file": auto_approve
+    guardrails:
+      max_loops: 8
+      max_tokens: 20000
+      timeout_seconds: 180
+    skills:
+      - id: dor
+        name: Definition of Ready
+        description: Validate that the ticket has goal, acceptance criteria, and scope.
+        tags: [coding, gate]
+
+  - slug: comprehension
+    name: coding-agent-comprehension
+    description: Phase 3/8, synthesise codebase plus agent docs context for the planner.
+    model:
+      provider: openai-compatible
+      model: qwen/qwen3.6-flash
+      api_key_env: OPENROUTER_API_KEY
+      base_url: https://openrouter.ai/api/v1
+      temperature: 0.2
+      max_output_tokens: 4000
+    pattern:
+      type: simple
+    prompts:
+      system_file: prompts/03-comprehension.md
+    tools:
+      mcp_servers:
+        - name: fs
+          transport: stdio
+          command: npx
+          args: ["-y", "@modelcontextprotocol/server-filesystem", "."]
+        - name: ctx7
+          transport: streamable-http
+          url: http://localhost:9000
+      filters:
+        exclude: ["fs.delete*", "fs.move*"]
+    confirmations:
+      destructive_hint: auto_deny
+      per_tool:
+        "fs.write_file": auto_approve
+    guardrails:
+      max_loops: 20
+      max_tokens: 80000
+      timeout_seconds: 600
+    skills:
+      - id: comprehend
+        name: Codebase comprehension
+        description: Summarise the relevant code and docs context.
+        tags: [coding, context]
+
+  - slug: planning
+    name: coding-agent-planning
+    description: Phase 4/8, emit plan.md, todo.md, and infra_needs.md.
+    model:
+      provider: openai-compatible
+      model: qwen/qwen3.6-27b
+      api_key_env: OPENROUTER_API_KEY
+      base_url: https://openrouter.ai/api/v1
+      temperature: 0.1
+      max_output_tokens: 6000
+    pattern:
+      type: simple
+    prompts:
+      system_file: prompts/04-planning.md
+    tools:
+      mcp_servers:
+        - name: fs
+          transport: stdio
+          command: npx
+          args: ["-y", "@modelcontextprotocol/server-filesystem", "."]
+        - name: ctx7
+          transport: streamable-http
+          url: http://localhost:9000
+      filters:
+        exclude: ["fs.delete*", "fs.move*"]
+    confirmations:
+      destructive_hint: auto_deny
+      per_tool:
+        "fs.write_file": auto_approve
+    guardrails:
+      max_loops: 15
+      max_tokens: 60000
+      timeout_seconds: 600
+    skills:
+      - id: plan
+        name: Plan and todo
+        description: Produce the implementation plan and the todo list.
+        tags: [coding, planning]
+
+  - slug: e2e-writing
+    name: coding-agent-e2e-writing
+    description: Phase 5/8, translate acceptance criteria into runnable E2E tests.
+    model:
+      provider: openai-compatible
+      model: qwen/qwen3.6-27b
+      api_key_env: OPENROUTER_API_KEY
+      base_url: https://openrouter.ai/api/v1
+      temperature: 0.1
+      max_output_tokens: 6000
+    pattern:
+      type: simple
+    prompts:
+      system_file: prompts/05-e2e-writing.md
+    tools:
+      mcp_servers:
+        - name: fs
+          transport: stdio
+          command: npx
+          args: ["-y", "@modelcontextprotocol/server-filesystem", "."]
+        - name: git
+          transport: stdio
+          command: uvx
+          args: ["mcp-server-git", "--repository", "."]
+      filters:
+        exclude: ["fs.delete*", "fs.move*"]
+    confirmations:
+      destructive_hint: auto_deny
+      per_tool:
+        "fs.write_file": auto_approve
+        "git.commit": auto_approve
+    guardrails:
+      max_loops: 15
+      max_tokens: 60000
+      timeout_seconds: 600
+    skills:
+      - id: e2e
+        name: E2E tests
+        description: Translate the acceptance criteria into runnable E2E tests.
+        tags: [coding, tests]
+
+  - slug: implementation
+    name: coding-agent-implementation
+    description: Phase 6/8, iterate on production code until the E2E tests pass.
+    model:
+      provider: openai-compatible
+      model: qwen/qwen3.6-27b
+      api_key_env: OPENROUTER_API_KEY
+      base_url: https://openrouter.ai/api/v1
+      temperature: 0.2
+      max_output_tokens: 8000
+    pattern:
+      type: simple
+    prompts:
+      system_file: prompts/06-implementation.md
+    tools:
+      mcp_servers:
+        - name: fs
+          transport: stdio
+          command: npx
+          args: ["-y", "@modelcontextprotocol/server-filesystem", "."]
+        - name: git
+          transport: stdio
+          command: uvx
+          args: ["mcp-server-git", "--repository", "."]
+      filters:
+        exclude: ["fs.delete*", "fs.move*"]
+    confirmations:
+      destructive_hint: auto_deny
+      per_tool:
+        "fs.write_file": auto_approve
+    guardrails:
+      max_loops: 40
+      max_tokens: 120000
+      timeout_seconds: 1800
+    skills:
+      - id: implement
+        name: Implementation
+        description: Write production code until E2E tests pass.
+        tags: [coding, implementation]
+
+  - slug: review
+    name: coding-agent-review
+    description: Phase 7/8, fresh-context review of the diff produced by phase 6.
+    model:
+      provider: openai-compatible
+      model: qwen/qwen3.6-27b
+      api_key_env: OPENROUTER_API_KEY
+      base_url: https://openrouter.ai/api/v1
+      temperature: 0.0
+      max_output_tokens: 4000
+    pattern:
+      type: simple
+    prompts:
+      system_file: prompts/07-review.md
+    tools:
+      mcp_servers:
+        - name: fs
+          transport: stdio
+          command: npx
+          args: ["-y", "@modelcontextprotocol/server-filesystem", "."]
+        - name: git
+          transport: stdio
+          command: uvx
+          args: ["mcp-server-git", "--repository", "."]
+      filters:
+        exclude: ["fs.delete*", "fs.move*", "fs.edit*", "git.commit", "git.push"]
+    confirmations:
+      destructive_hint: auto_deny
+      per_tool:
+        "fs.write_file": auto_approve
+    guardrails:
+      max_loops: 15
+      max_tokens: 60000
+      timeout_seconds: 600
+    skills:
+      - id: review
+        name: Review
+        description: Fresh-context review of the produced diff.
+        tags: [coding, review]
+
+  - slug: pr-creation
+    name: coding-agent-pr-creation
+    description: Phase 8/8, push and open the Pull Request.
+    model:
+      provider: openai-compatible
+      model: qwen/qwen3.6-27b
+      api_key_env: OPENROUTER_API_KEY
+      base_url: https://openrouter.ai/api/v1
+      temperature: 0.1
+      max_output_tokens: 3000
+    pattern:
+      type: simple
+    prompts:
+      system_file: prompts/08-pr-creation.md
+    tools:
+      mcp_servers:
+        - name: fs
+          transport: stdio
+          command: npx
+          args: ["-y", "@modelcontextprotocol/server-filesystem", "."]
+        - name: git
+          transport: stdio
+          command: uvx
+          args: ["mcp-server-git", "--repository", "."]
+      filters:
+        exclude: ["fs.delete*", "fs.move*"]
+    confirmations:
+      destructive_hint: auto_deny
+      per_tool:
+        "fs.write_file": auto_approve
+    guardrails:
+      max_loops: 10
+      max_tokens: 30000
+      timeout_seconds: 600
+    skills:
+      - id: pr
+        name: PR creation
+        description: Push and open the PR.
+        tags: [coding, pr]
+
+  - slug: orchestrator
+    name: coding-agent-orchestrator
+    description: Drives a user story through the 8 phases by chaining the in-process agents.
+    model:
+      provider: openai-compatible
+      model: qwen/qwen3.6-flash
+      api_key_env: OPENROUTER_API_KEY
+      base_url: https://openrouter.ai/api/v1
+      temperature: 0.0
+      max_output_tokens: 500
+    pattern:
+      type: orchestrate
+      mode: sequential
+      agents:
+        - name: classification
+          a2a_url: http://localhost:9100/agents/classification
+        - name: dor
+          a2a_url: http://localhost:9100/agents/dor
+        - name: comprehension
+          a2a_url: http://localhost:9100/agents/comprehension
+        - name: planning
+          a2a_url: http://localhost:9100/agents/planning
+        - name: e2e_writing
+          a2a_url: http://localhost:9100/agents/e2e-writing
+        - name: implementation
+          a2a_url: http://localhost:9100/agents/implementation
+        - name: review
+          a2a_url: http://localhost:9100/agents/review
+        - name: pr_creation
+          a2a_url: http://localhost:9100/agents/pr-creation
+      aggregator:
+        prompt_file: prompts/orchestrator.md
+    prompts:
+      system: |
+        You orchestrate an 8-phase ticket-to-PR pipeline. The phase agents
+        communicate by reading and writing files under .agent_work/<ticket_id>/.
+        The final output is the PR URL produced by phase 8.
+    guardrails:
+      max_loops: 1
+      max_tokens: 200000
+      timeout_seconds: 3600
+      max_depth: 1
+    skills:
+      - id: ticket-to-pr
+        name: Ticket-to-PR
+        description: Walks the 8 phases and returns the merged PR URL.
+        tags: [coding, pipeline]
+        examples:
+          - "specs/tickets/CR-001.md"

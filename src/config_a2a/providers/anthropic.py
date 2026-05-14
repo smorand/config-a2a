@@ -75,9 +75,7 @@ class AnthropicProvider(LlmProvider):
                     {
                         "role": "assistant",
                         "content": [
-                            *(
-                                [{"type": "text", "text": msg.content}] if msg.content else []
-                            ),
+                            *([{"type": "text", "text": msg.content}] if msg.content else []),
                             *[
                                 {
                                     "type": "tool_use",

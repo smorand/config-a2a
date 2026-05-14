@@ -1,10 +1,15 @@
-"""FastAPI router exposing the A2A v1.0 protocol surface."""
+"""FastAPI router exposing the A2A v1.0 protocol surface for one agent slug.
+
+Each agent gets its own router mounted at ``/agents/<slug>``; ``create_router``
+takes the slug so handlers can resolve the right runtime out of the server
+registry on the FastAPI app state.
+"""
 
 from __future__ import annotations
 
-from typing import Any  # noqa: F401 — used by helper above
+from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from config_a2a.a2a.card import build_agent_card
@@ -13,20 +18,14 @@ from config_a2a.a2a.sse import SseEmitter
 from config_a2a.runtime import AgentRuntime, TaskRecord
 
 
-def _runtime(request: Request) -> AgentRuntime:
-    runtime = request.app.state.runtime
-    if runtime is None:  # pragma: no cover - safety net
-        raise HTTPException(status_code=500, detail="Runtime not initialised")
-    return runtime
-
-
 def _user_text(message: Message) -> str:
     chunks = [part.text for part in message.parts if hasattr(part, "text")]
     return "\n".join(chunks).strip()
 
 
-def _base_url(request: Request) -> str:
-    return str(request.base_url).rstrip("/")
+def _base_url_for_agent(request: Request, slug: str) -> str:
+    root = str(request.base_url).rstrip("/")
+    return f"{root}/agents/{slug}"
 
 
 def _task_to_dict(record: TaskRecord) -> dict[str, Any]:
@@ -41,17 +40,48 @@ def _task_to_dict(record: TaskRecord) -> dict[str, Any]:
     return task.model_dump()
 
 
-def create_router() -> APIRouter:
+def create_router(slug: str) -> APIRouter:
+    """Build a per-agent A2A router. Mounted with ``prefix=/agents/<slug>``."""
+
+    def _resolve_runtime(request: Request) -> AgentRuntime:
+        server = getattr(request.app.state, "server", None)
+        if server is None:  # pragma: no cover — safety net
+            raise HTTPException(status_code=500, detail="Server registry not initialised")
+        runtime = server.get_runtime(slug)
+        if runtime is None:
+            raise HTTPException(status_code=404, detail=f"agent {slug!r} not found")
+        return runtime
+
     router = APIRouter()
 
-    @router.get("/.well-known/a2a/agent-card", tags=["a2a"])
-    async def agent_card(request: Request, runtime: AgentRuntime = Depends(_runtime)) -> JSONResponse:
-        return JSONResponse(build_agent_card(runtime.config, _base_url(request)))
-
-    # Alias paths used by some clients.
     @router.get("/.well-known/agent-card.json", tags=["a2a"])
-    async def agent_card_alias(request: Request, runtime: AgentRuntime = Depends(_runtime)) -> JSONResponse:
-        return JSONResponse(build_agent_card(runtime.config, _base_url(request)))
+    async def agent_card(
+        request: Request,
+        runtime: AgentRuntime = Depends(_resolve_runtime),
+    ) -> JSONResponse:
+        server = request.app.state.server
+        return JSONResponse(
+            build_agent_card(
+                runtime.config,
+                _base_url_for_agent(request, slug),
+                server_card=server.config.card,
+            )
+        )
+
+    # Legacy alias for older A2A clients.
+    @router.get("/.well-known/a2a/agent-card", tags=["a2a"])
+    async def agent_card_legacy(
+        request: Request,
+        runtime: AgentRuntime = Depends(_resolve_runtime),
+    ) -> JSONResponse:
+        server = request.app.state.server
+        return JSONResponse(
+            build_agent_card(
+                runtime.config,
+                _base_url_for_agent(request, slug),
+                server_card=server.config.card,
+            )
+        )
 
     async def _resolve_task(payload: SendMessageRequest, runtime: AgentRuntime) -> Any:
         if payload.message.taskId:
@@ -63,7 +93,8 @@ def create_router() -> APIRouter:
 
     @router.post("/message:send", tags=["a2a"])
     async def send_message(
-        payload: SendMessageRequest, runtime: AgentRuntime = Depends(_runtime)
+        payload: SendMessageRequest,
+        runtime: AgentRuntime = Depends(_resolve_runtime),
     ) -> JSONResponse:
         record = await _resolve_task(payload, runtime)
         emitter = SseEmitter()
@@ -83,7 +114,8 @@ def create_router() -> APIRouter:
 
     @router.post("/message:stream", tags=["a2a"])
     async def stream_message(
-        payload: SendMessageRequest, runtime: AgentRuntime = Depends(_runtime)
+        payload: SendMessageRequest,
+        runtime: AgentRuntime = Depends(_resolve_runtime),
     ) -> StreamingResponse:
         record = await _resolve_task(payload, runtime)
         await runtime.tasks.append_message(record.id, payload.message)
@@ -118,14 +150,20 @@ def create_router() -> APIRouter:
         return StreamingResponse(emitter.stream(), media_type="text/event-stream")
 
     @router.get("/tasks/{task_id}", tags=["a2a"])
-    async def get_task(task_id: str, runtime: AgentRuntime = Depends(_runtime)) -> JSONResponse:
+    async def get_task(
+        task_id: str,
+        runtime: AgentRuntime = Depends(_resolve_runtime),
+    ) -> JSONResponse:
         record = await runtime.tasks.get(task_id)
         if record is None:
             raise HTTPException(status_code=404, detail="Task not found")
         return JSONResponse(_task_to_dict(record))
 
     @router.post("/tasks/{task_id}:cancel", tags=["a2a"])
-    async def cancel_task(task_id: str, runtime: AgentRuntime = Depends(_runtime)) -> JSONResponse:
+    async def cancel_task(
+        task_id: str,
+        runtime: AgentRuntime = Depends(_resolve_runtime),
+    ) -> JSONResponse:
         record = await runtime.tasks.get(task_id)
         if record is None:
             raise HTTPException(status_code=404, detail="Task not found")
@@ -135,12 +173,13 @@ def create_router() -> APIRouter:
         return JSONResponse(_task_to_dict(record))
 
     @router.get("/tasks", tags=["a2a"])
-    async def list_tasks(runtime: AgentRuntime = Depends(_runtime)) -> JSONResponse:
+    async def list_tasks(
+        runtime: AgentRuntime = Depends(_resolve_runtime),
+    ) -> JSONResponse:
         records = await runtime.tasks.list_recent()
         return JSONResponse({"tasks": [_task_to_dict(r) for r in records]})
 
-    @router.get("/health", tags=["system"])
-    async def health() -> JSONResponse:
-        return JSONResponse({"status": "ok"}, status_code=status.HTTP_200_OK)
-
     return router
+
+
+__all__ = ["create_router"]

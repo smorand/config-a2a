@@ -57,21 +57,15 @@ async def test_openai_compat_chat_roundtrip() -> None:
 
 
 async def test_openai_compat_propagates_errors() -> None:
-    provider = OpenAiCompatibleProvider(
-        model="m", base_url="https://example.test/v1", api_key=None
-    )
+    provider = OpenAiCompatibleProvider(model="m", base_url="https://example.test/v1", api_key=None)
     try:
         with respx.mock() as router:
-            router.post("https://example.test/v1/chat/completions").mock(
-                return_value=Response(500, text="boom")
-            )
+            router.post("https://example.test/v1/chat/completions").mock(return_value=Response(500, text="boom"))
             import pytest
 
             from config_a2a.providers.base import ProviderError
 
             with pytest.raises(ProviderError):
-                await provider.chat(
-                    ChatRequest(messages=[ChatMessage(role="user", content="hi")])
-                )
+                await provider.chat(ChatRequest(messages=[ChatMessage(role="user", content="hi")]))
     finally:
         await provider.aclose()

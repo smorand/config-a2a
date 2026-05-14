@@ -32,9 +32,7 @@ def register(name: str, runner: PatternRunner) -> None:
 
 def get_runner(pattern_type: str) -> PatternRunner:
     if pattern_type not in _RUNNERS:
-        raise PatternError(
-            f"Pattern '{pattern_type}' is not implemented yet (planned in a later iteration)."
-        )
+        raise PatternError(f"Pattern '{pattern_type}' is not implemented yet (planned in a later iteration).")
     return _RUNNERS[pattern_type]
 
 

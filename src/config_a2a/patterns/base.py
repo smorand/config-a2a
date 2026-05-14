@@ -92,7 +92,9 @@ async def emit_thinking(ctx: ExecutionContext, text: str) -> None:
     )
 
 
-async def call_llm(ctx: ExecutionContext, messages: list[ChatMessage], *, tools: list[ToolSpec] | None = None) -> ChatResponse:
+async def call_llm(
+    ctx: ExecutionContext, messages: list[ChatMessage], *, tools: list[ToolSpec] | None = None
+) -> ChatResponse:
     # Working-memory hook: enforce the sliding window before the call.
     if ctx.memory is not None:
         messages = await ctx.memory.maybe_summarise(messages, provider=ctx.provider)

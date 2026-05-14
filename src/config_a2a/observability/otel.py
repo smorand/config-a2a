@@ -1,4 +1,4 @@
-"""Idempotent OpenTelemetry setup, honouring the YAML observability block."""
+"""Idempotent OpenTelemetry setup, honouring the server-level observability block."""
 
 from __future__ import annotations
 
@@ -10,30 +10,28 @@ from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, SimpleSpanProcessor
 
-from config_a2a.config.models import AgentConfig
+from config_a2a.config.models import ServerConfig
 from config_a2a.observability.jsonl_exporter import JsonlSpanExporter
 
 log = logging.getLogger(__name__)
 _INITIALISED = False
 
 
-def setup_otel(config: AgentConfig) -> None:
-    """Wire a TracerProvider once per process. Safe to call repeatedly."""
+def setup_otel(server: ServerConfig) -> None:
+    """Wire a single TracerProvider for the whole server. Safe to call repeatedly."""
     global _INITIALISED  # noqa: PLW0603
-    if _INITIALISED or not config.observability.otel.enabled:
+    if _INITIALISED or not server.observability.otel.enabled:
         return
-    otel = config.observability.otel
+    otel = server.observability.otel
     resource = Resource.create(
         {
-            "service.name": otel.service_name or config.name,
-            "service.version": config.version,
-            "agent.pattern": config.pattern.type,
+            "service.name": otel.service_name or server.name,
+            "service.version": server.version,
         }
     )
     provider = TracerProvider(resource=resource)
     if otel.exporter == "jsonl":
-        # SimpleSpanProcessor (no buffering) — local JSONL is a debug aid; we want
-        # spans on disk immediately, no flush dance on shutdown.
+        # SimpleSpanProcessor: write spans on disk immediately, no flush dance.
         provider.add_span_processor(SimpleSpanProcessor(JsonlSpanExporter(otel.jsonl_path)))
     elif otel.exporter == "otlp":
         try:

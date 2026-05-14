@@ -10,21 +10,22 @@ from config_a2a.persistence.models import MemoryRow
 
 
 class SqlAlchemyStore(MemoryStore):
-    """Stores memory records in the existing tasks DB (one table per backend).
+    """Stores memory records in the shared server database.
 
-    Search is a token-overlap rank over rows filtered by `agent_name` + `scope`;
-    works on both SQLite and Postgres with zero extension. Vector retrieval is
-    a future hook (see `.agent_docs/memory.md`).
+    Search is a token-overlap rank over rows filtered by ``agent_slug`` +
+    ``scope``; works on both SQLite and Postgres with zero extension. Vector
+    retrieval is a future hook (see ``.agent_docs/memory.md``).
     """
 
     def __init__(self, session_factory: async_sessionmaker) -> None:
         self._session_factory = session_factory
 
-    async def write(self, record: MemoryRecord, *, agent_name: str) -> None:
+    async def write(self, record: MemoryRecord, *, agent_slug: str, agent_name: str) -> None:
         async with self._session_factory.begin() as session:
             session.add(
                 MemoryRow(
                     id=record.id,
+                    agent_slug=agent_slug,
                     agent_name=agent_name,
                     scope=record.scope,
                     user_id=record.user_id,
@@ -38,14 +39,14 @@ class SqlAlchemyStore(MemoryStore):
         self,
         query: str,
         *,
-        agent_name: str,
+        agent_slug: str,
         scopes: list[Scope],
         top_k: int,
         user_id: str | None = None,
     ) -> list[MemoryRecord]:
         async with self._session_factory() as session:
             stmt = select(MemoryRow).where(
-                MemoryRow.agent_name == agent_name,
+                MemoryRow.agent_slug == agent_slug,
                 MemoryRow.scope.in_(list(scopes)),
             )
             rows = list(await session.scalars(stmt))
@@ -70,9 +71,9 @@ class SqlAlchemyStore(MemoryStore):
         scored.sort(key=lambda r: r.score, reverse=True)
         return scored[:top_k]
 
-    async def list_all(self, *, agent_name: str) -> list[MemoryRecord]:
+    async def list_all(self, *, agent_slug: str) -> list[MemoryRecord]:
         async with self._session_factory() as session:
-            rows = list(await session.scalars(select(MemoryRow).where(MemoryRow.agent_name == agent_name)))
+            rows = list(await session.scalars(select(MemoryRow).where(MemoryRow.agent_slug == agent_slug)))
         return [
             MemoryRecord(
                 id=row.id,

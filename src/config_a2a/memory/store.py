@@ -45,27 +45,26 @@ def overlap_score(record: str, query: str) -> float:
 class MemoryStore(ABC):
     """Persistence interface for cross-task memory records.
 
-    Implementations should be agent-scoped: one store per agent process.
-    The runtime owns the call timing (read/write hooks); the store only
-    promises durable storage + relevance-ranked search.
+    Records are keyed by the agent's ``slug`` (unique within the server). The
+    human-readable ``agent_name`` is denormalised alongside for trace value.
     """
 
     @abstractmethod
-    async def write(self, record: MemoryRecord, *, agent_name: str) -> None: ...
+    async def write(self, record: MemoryRecord, *, agent_slug: str, agent_name: str) -> None: ...
 
     @abstractmethod
     async def search(
         self,
         query: str,
         *,
-        agent_name: str,
+        agent_slug: str,
         scopes: list[Scope],
         top_k: int,
         user_id: str | None = None,
     ) -> list[MemoryRecord]: ...
 
     @abstractmethod
-    async def list_all(self, *, agent_name: str) -> list[MemoryRecord]: ...
+    async def list_all(self, *, agent_slug: str) -> list[MemoryRecord]: ...
 
     async def aclose(self) -> None:  # pragma: no cover — default no-op
         return None

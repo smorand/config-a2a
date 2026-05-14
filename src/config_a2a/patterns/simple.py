@@ -54,9 +54,7 @@ async def run_simple(ctx: ExecutionContext) -> None:
                     tool_call_id=pending.get("tool_call_id", "resume"),
                 )
             )
-            await ctx.task_store.update_status(
-                ctx.task_id, TaskStatus(state="TASK_STATE_WORKING"), clear_pending=True
-            )
+            await ctx.task_store.update_status(ctx.task_id, TaskStatus(state="TASK_STATE_WORKING"), clear_pending=True)
         else:
             await emit_status(ctx, "TASK_STATE_COMPLETED", text="Cancelled at user request.", final=True)
             return
@@ -79,9 +77,7 @@ async def run_simple(ctx: ExecutionContext) -> None:
             final_text = response.content
             break
 
-        messages.append(
-            ChatMessage(role="assistant", content=response.content or "", tool_calls=response.tool_calls)
-        )
+        messages.append(ChatMessage(role="assistant", content=response.content or "", tool_calls=response.tool_calls))
 
         suspended = False
         for tool_call in response.tool_calls:

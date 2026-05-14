@@ -1,15 +1,4 @@
-"""Iter 12 e2e: real OpenRouter, two independent turns, the second must recall.
-
-The flow exercised here is exactly what the memory subsystem is for:
-
-  Turn 1 (contextId=A): "Remember my favourite colour is purple."
-    └─ extractor LLM call distils a user-scoped fact and writes it.
-  Turn 2 (contextId=B, different task): "What is my favourite colour?"
-    └─ read hook injects the fact into the system prompt.
-    └─ LLM answers with "purple" without having been told twice.
-
-Gated by RUN_E2E=1 + OPENROUTER_API_KEY.
-"""
+"""E2E memory: real OpenRouter, two turns, the second must recall."""
 
 from __future__ import annotations
 
@@ -22,12 +11,10 @@ import httpx
 import pytest
 
 from config_a2a.api import create_app
-from config_a2a.config.loader import load_agent_config
-from config_a2a.memory import build_orchestrator
-from config_a2a.persistence import build_session_factory_for, build_task_store, run_migrations
-from config_a2a.runtime import AgentRuntime
+from config_a2a.config.loader import load_server_config
+from config_a2a.persistence import run_migrations
 
-EXAMPLE = Path(__file__).resolve().parents[2] / "config_examples" / "08-memory" / "agent.yaml"
+EXAMPLE = Path(__file__).resolve().parents[2] / "config_examples" / "08-memory" / "server.yaml"
 
 pytestmark = pytest.mark.e2e
 
@@ -42,7 +29,6 @@ def _require_openrouter() -> None:
 
 @pytest.fixture()
 def fresh_db(tmp_path: Path) -> str:
-    """Create an empty SQLite file with the migrated schema (sync; alembic uses asyncio.run)."""
     from config_a2a.config.models import PersistenceConfig
 
     db = tmp_path / f"memory-{uuid.uuid4().hex[:8]}.db"
@@ -56,7 +42,14 @@ def _final_text(task_json: dict[str, Any]) -> str:
     return "\n".join(p.get("text") or "" for p in parts).strip()
 
 
-async def _send(client: httpx.AsyncClient, text: str, *, context_id: str, task_id: str | None = None) -> dict[str, Any]:
+async def _send(
+    client: httpx.AsyncClient,
+    prefix: str,
+    text: str,
+    *,
+    context_id: str,
+    task_id: str | None = None,
+) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "messageId": str(uuid.uuid4()),
         "role": "ROLE_USER",
@@ -66,7 +59,7 @@ async def _send(client: httpx.AsyncClient, text: str, *, context_id: str, task_i
     if task_id is not None:
         payload["taskId"] = task_id
     response = await client.post(
-        "/message:send",
+        f"{prefix}/message:send",
         json={"message": payload},
         timeout=httpx.Timeout(120.0),
     )
@@ -75,64 +68,49 @@ async def _send(client: httpx.AsyncClient, text: str, *, context_id: str, task_i
 
 
 async def test_memory_carries_a_user_fact_across_two_turns(fresh_db: str) -> None:
-    """The headline E2E: turn 1 establishes a fact, turn 2 retrieves it."""
-    config = load_agent_config(EXAMPLE)
-    config.persistence.url = fresh_db
-
-    tasks = build_task_store(config)
-    orchestrator = build_orchestrator(
-        config, session_factory=build_session_factory_for(config)
-    )
-    runtime = AgentRuntime(config, tasks=tasks, memory=orchestrator)
-    app = create_app(runtime)
+    server_config = load_server_config(EXAMPLE)
+    server_config.persistence.url = fresh_db
+    app = create_app(server_config)
+    server = app.state.server
+    runtime = server.get_runtime("memory")
+    assert runtime is not None
+    prefix = "/agents/memory"
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-        # ----- Turn 1 -----
         turn1 = await _send(
             client,
+            prefix,
             "Remember this fact about me: my favourite colour is purple.",
             context_id=str(uuid.uuid4()),
         )
-        assert turn1["status"]["state"] == "TASK_STATE_COMPLETED", (
-            f"unexpected state turn1: {turn1['status']['state']}"
-        )
+        assert turn1["status"]["state"] == "TASK_STATE_COMPLETED"
 
-        # The extractor should have written at least one record mentioning purple.
-        assert orchestrator.store is not None
-        records = await orchestrator.store.list_all(agent_name=config.name)
-        assert records, "memory store is empty after turn 1; harvest hook did not fire"
+        assert runtime.memory.store is not None
+        records = await runtime.memory.store.list_all(agent_slug="memory")
+        assert records
         joined = " | ".join(r.text.lower() for r in records)
-        assert "purple" in joined, f"no record mentions purple; got: {joined!r}"
+        assert "purple" in joined
 
-        # ----- Turn 2 (new context) -----
         turn2 = await _send(
             client,
+            prefix,
             "What is my favourite colour? Reply with the colour name only.",
             context_id=str(uuid.uuid4()),
         )
         assert turn2["status"]["state"] == "TASK_STATE_COMPLETED"
         answer = _final_text(turn2).lower()
-        assert "purple" in answer, (
-            f"memory recall failed; turn-2 answer was: {answer!r}; "
-            f"stored memory was: {joined!r}"
-        )
+        assert "purple" in answer
 
 
 async def test_working_memory_summarises_a_long_conversation(fresh_db: str) -> None:
-    """Tiny window forces a summary by the third turn; final reply still respects constraints."""
-    config = load_agent_config(EXAMPLE)
-    config.persistence.url = fresh_db
-    config.memory.working.window = 4
-    config.memory.working.summarize_every = 2
-    runtime = AgentRuntime(
-        config,
-        tasks=build_task_store(config),
-        memory=build_orchestrator(
-            config, session_factory=build_session_factory_for(config)
-        ),
-    )
-    app = create_app(runtime)
+    server_config = load_server_config(EXAMPLE)
+    server_config.persistence.url = fresh_db
+    agent = server_config.agents[0]
+    agent.memory.working.window = 4
+    agent.memory.working.summarize_every = 2
+    app = create_app(server_config)
+    prefix = f"/agents/{agent.slug}"
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
         context_id = str(uuid.uuid4())
@@ -144,12 +122,8 @@ async def test_working_memory_summarises_a_long_conversation(fresh_db: str) -> N
             "I have one hour of prep time.",
             "Suggest a single dish that satisfies all constraints. Be concise.",
         ]:
-            response = await _send(client, text, context_id=context_id, task_id=task_id)
-            assert response["status"]["state"] == "TASK_STATE_COMPLETED", (
-                f"turn failed: {response['status']['state']}"
-            )
+            response = await _send(client, prefix, text, context_id=context_id, task_id=task_id)
+            assert response["status"]["state"] == "TASK_STATE_COMPLETED"
             task_id = response["id"]
         final = _final_text(response).lower()
-        assert "veg" in final, (
-            f"final answer ignored the vegetarian constraint: {final!r}"
-        )
+        assert "veg" in final

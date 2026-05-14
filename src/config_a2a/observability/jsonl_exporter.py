@@ -63,7 +63,9 @@ def _serialise(span: ReadableSpan) -> dict[str, Any]:
         "span_id": f"{context.span_id:016x}" if context else None,
         "parent_id": f"{parent_ctx.span_id:016x}" if parent_ctx else None,
         "kind": span.kind.name if hasattr(span.kind, "name") else str(span.kind),
-        "status": span.status.status_code.name if hasattr(span.status.status_code, "name") else str(span.status.status_code),
+        "status": (
+            span.status.status_code.name if hasattr(span.status.status_code, "name") else str(span.status.status_code)
+        ),
         "start": span.start_time,
         "end": span.end_time,
         "attributes": attrs,

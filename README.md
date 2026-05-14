@@ -1,165 +1,178 @@
 # config-a2a
 
-Create advanced A2A (Agent-to-Agent) agents from YAML configuration files.
+Headless A2A (Agent-to-Agent) **multi-agent server factory** driven by YAML.
 
-`config-a2a` is an "agent factory": one YAML manifest turns into a production-grade A2A v1.0 server that `web-a2a` (or any A2A client) can register and chat with. No UI, no database to provision, no boilerplate — write a config, run `uv run agent --config file.yaml`, and you have an agent on a port.
+One YAML file describes a FastAPI process and the agents it hosts. Run
+`uv run agent --config server.yaml` and you get one HTTP port serving N
+A2A 1.0 agents under `/agents/<slug>`, plus an admin REST surface for hot
+load / reload / unload. No UI, no boilerplate.
 
 ## Why
 
-The companion project `lcnc-a2a` builds A2A agents from a web form (Postgres + HTMX). That UI is great for exploration but the artefacts are not version-controllable, not CI/CD-friendly, and the patterns are limited to Simple, ReAct, and Plan & Execute. `config-a2a` solves the same problem from the other direction: agents are pure YAML, every pattern from the recent best-practice playbook is supported, and the whole runtime is headless.
+The companion project `lcnc-a2a` builds A2A agents from a web form (Postgres
+plus HTMX). That UI is great for exploration but the artefacts are not
+version-controllable, not CI/CD-friendly, and the patterns are limited.
+`config-a2a` solves the same problem from the other direction: agents are
+pure YAML, every pattern from the recent best-practice playbook is supported,
+several agents share one FastAPI process, and the whole runtime is headless.
 
 ## Patterns supported
 
-| Pattern             | Topology                              | Use it for                                        |
-| ------------------- | ------------------------------------- | ------------------------------------------------- |
-| `simple`            | One LLM call, optional tool loop      | Q&A, single-shot tasks                            |
-| `react`             | Thought → Action → Observation loop   | Tool-heavy tasks with reasoning trace             |
-| `plan_execute`      | Planner → Sequential executor → Synth | Multi-step research, transformations              |
-| `handoff`           | Router → 1 of N (local or remote)     | Specialist routing                                |
-| `orchestrate`       | Parallel/sequential fan-out → aggregator | Panel-of-experts, multi-source aggregation     |
-| `debate`            | Parallel rounds of N debaters → judge | Argumentation, devil's-advocate analysis          |
-| `tree_of_thoughts`  | Branch → evaluate → prune → repeat    | Exploration of solution space                     |
+| Pattern             | Topology                                | Use it for                                        |
+| ------------------- | --------------------------------------- | ------------------------------------------------- |
+| `simple`            | One LLM call, optional tool loop        | Q&A, single-shot tasks                            |
+| `react`             | Thought, Action, Observation loop       | Tool-heavy tasks with reasoning trace             |
+| `plan_execute`      | Planner, Sequential executor, Synth     | Multi-step research, transformations              |
+| `handoff`           | Router, 1 of N (local or remote)        | Specialist routing                                |
+| `orchestrate`       | Parallel/sequential fan-out, aggregator | Panel-of-experts, multi-source aggregation        |
+| `debate`            | Parallel rounds of N debaters, judge    | Argumentation, devil's-advocate analysis          |
+| `tree_of_thoughts`  | Branch, evaluate, prune, repeat         | Exploration of solution space                     |
 
 ## LLM providers
 
-* `anthropic` — Anthropic Messages API, Claude 4.x
-* `google` — Google Generative Language API (Gemini, API key)
-* `vertex` — VertexAI Gemini with ADC (gcloud / service account)
-* `openai-compatible` — any `/chat/completions` endpoint (OpenRouter, llama.cpp, vLLM, local servers)
+* `anthropic`, `google`, `vertex`, `openai-compatible` (OpenRouter, vLLM, llama.cpp, ...)
 
-All providers go through `httpx.AsyncClient` directly — no vendor SDK pinning.
+All providers go through `httpx.AsyncClient` directly; no vendor SDK pinning.
 
 ## MCP transports
 
-* `stdio` — environment-scrubbed, 10 s discovery timeout
-* `streamable-http` — current MCP spec (2025-03-26)
-* `sse` — legacy, emits a `DeprecationWarning` at boot (kept for Keboola / Atlassian compatibility windows)
+* `stdio`, `streamable-http`, `sse` (legacy)
 
 ## Quickstart
 
 ```bash
 uv sync --extra dev
 export OPENROUTER_API_KEY=...
-uv run agent --config config_examples/01-simple/agent.yaml --port 9001
+uv run agent --config config_examples/01-simple/server.yaml --port 9001
 ```
 
 Then in another shell:
 
 ```bash
-curl http://localhost:9001/.well-known/a2a/agent-card | jq
-curl -X POST http://localhost:9001/message:send \
+curl http://localhost:9001/.well-known/agent-card.json | jq          # directory
+curl http://localhost:9001/agents/simple/.well-known/agent-card.json | jq
+curl -X POST http://localhost:9001/agents/simple/message:send \
   -H 'Content-Type: application/json' \
   -d '{"message":{"messageId":"q1","role":"ROLE_USER","parts":[{"text":"Say hi"}]}}'
 ```
 
-To register the agent in `web-a2a`, point its "add agent" form at `http://localhost:9001`.
+Register the server in `web-a2a` by pointing the "add agent" form at the
+relevant `/agents/<slug>` URL (one entry per agent).
 
-## YAML schema (canonical)
+## YAML at a glance
 
 ```yaml
-name: my-agent
-version: 0.1.0
+name: my-server
 description: A friendly assistant.
+version: 0.1.0
 
 server:
   host: 0.0.0.0
-  port: 9001                # CLI --port overrides this
+  port: 9001
 
 persistence:
-  backend: sqlite           # sqlite | postgresql
-  url: sqlite+aiosqlite:///./state/my-agent.db
+  backend: sqlite                     # sqlite | postgresql
+  url: sqlite+aiosqlite:///./state/my-server.db
   run_migrations_on_start: true
-
-model:
-  provider: anthropic
-  model: claude-sonnet-4-6
-  api_key_env: ANTHROPIC_API_KEY
-
-pattern:
-  type: simple              # simple | react | plan_execute | handoff | orchestrate | debate | tree_of_thoughts
-
-prompts:
-  system_file: prompts/system.md   # or `system: "inline..."`
-
-tools:
-  mcp_servers:
-    - name: fs
-      transport: stdio
-      command: npx
-      args: [-y, "@modelcontextprotocol/server-filesystem", /tmp]
-  filters:
-    exclude: ["*delete*"]
-
-guardrails:
-  max_loops: 30
-  max_tokens: 200000
-  timeout_seconds: 300
-  max_depth: 5
-  anti_loop:
-    enabled: true
-    similarity_threshold: 0.92
-
-confirmations:
-  destructive_hint: prompt           # prompt | auto_approve | auto_deny
-  per_tool:
-    fs.delete_file: prompt
 
 observability:
   otel:
     enabled: true
-    exporter: jsonl                  # jsonl | otlp
-    jsonl_path: traces/my-agent.jsonl
+    exporter: jsonl                   # jsonl | otlp
+    jsonl_path: traces/my-server.jsonl
 
-skills:
-  - id: chat
-    name: Chat
-    description: Open-ended chat.
-    tags: [chat]
-    examples: ["What can you do?"]
+admin:
+  enabled: true
 
-authentication:
-  type: none                          # none | bearer | api_key
-  # value_env: AGENT_BEARER_TOKEN
+agents:
+  - slug: simple                      # mounted at /agents/simple
+    name: simple-assistant
+    description: One-shot chat.
+    model:
+      provider: openai-compatible
+      model: openrouter/auto:free
+      api_key_env: OPENROUTER_API_KEY
+      base_url: https://openrouter.ai/api/v1
+    pattern:
+      type: simple
+    prompts:
+      system_file: prompts/system.md
+    guardrails:
+      max_loops: 5
+      max_tokens: 8000
 ```
 
-See `.agent_docs/yaml-schema.md` for the per-pattern blocks and full field reference.
+See `.agent_docs/yaml-schema.md` for the full field reference (including
+per-pattern blocks, MCP, memory, confirmations, the per-agent `card:`
+sub-block).
+
+## Admin REST
+
+When `admin.enabled` is `true` (the default), the server also exposes:
+
+```
+GET    /admin/status
+GET    /admin/agents
+POST   /admin/agents                              # body: inline YAML/JSON OR {"config_path": "..."}
+GET    /admin/agents/{slug}
+GET    /admin/agents/{slug}/status
+DELETE /admin/agents/{slug}
+POST   /admin/agents/{slug}/reloads               # 202, async op
+GET    /admin/agents/{slug}/reloads/{op_id}
+```
+
+See `.agent_docs/a2a-protocol.md` for response shapes.
 
 ## Examples
 
-| Folder                              | Pattern              | Notes                                            |
-| ----------------------------------- | -------------------- | ------------------------------------------------ |
-| `config_examples/01-simple`         | `simple`             | One LLM call, no tools, OpenRouter free model    |
-| `config_examples/02-react`          | `react` (with tools) | Filesystem MCP server over stdio                 |
-| `config_examples/03-plan-execute`   | `plan_execute`       | Planner / executor / synth prompts in files      |
-| `config_examples/04-handoff`        | `handoff`            | Router + two local sub-agents (`math`, `chat`)   |
-| `config_examples/05-orchestrate`    | `orchestrate`        | Parallel fan-out to remote A2A agents            |
-| `config_examples/06-debate`         | `debate`             | Pro / Con / Judge                                |
-| `config_examples/07-tree-of-thoughts` | `tree_of_thoughts` | Branch / evaluate / prune                        |
-| `config_examples/08-memory`         | `simple` + memory    | User-fact recall across independent contexts     |
+| Folder                                  | Agents | Notes                                                  |
+| --------------------------------------- | -----: | ------------------------------------------------------ |
+| `config_examples/01-simple`             | 1      | One LLM call, no tools                                 |
+| `config_examples/02-react`              | 1      | Filesystem MCP server over stdio                       |
+| `config_examples/03-plan-execute`       | 1      | Planner / executor / synth prompts in files            |
+| `config_examples/04-handoff`            | 3      | Router + two sub-agents (math, chat) in one server     |
+| `config_examples/05-orchestrate`        | 1      | Parallel fan-out to remote A2A agents                  |
+| `config_examples/06-debate`             | 1      | Pro / Con / Judge                                      |
+| `config_examples/07-tree-of-thoughts`   | 1      | Branch / evaluate / prune                              |
+| `config_examples/08-memory`             | 1      | User-fact recall across independent contexts           |
+| `config_examples/08-coding-agent`       | 9      | 8-phase ticket-to-PR pipeline plus orchestrator        |
 
 ## Development
 
 ```bash
 make sync          # uv sync --extra dev
-make format        # black -l 120 src tests
-make lint          # pylint src
+make format        # ruff format
+make lint          # ruff + mypy
 make test          # pytest tests/unit
 make e2e           # RUN_E2E=1 pytest tests/e2e (needs OPENROUTER_API_KEY)
 make migrate       # alembic upgrade head
-make run-simple    # uv run agent --config config_examples/01-simple/agent.yaml
 ```
 
 ## Persistence
 
-Task state and message history are persisted via async SQLAlchemy 2.x. SQLite is the default (`sqlite+aiosqlite://`). Switch the YAML `persistence.url` to a `postgresql+asyncpg://…` URL for production; the same Alembic migration runs on both backends.
+Task state, message history, and (when enabled) memory records are persisted
+via async SQLAlchemy 2.x against a single server-level database. SQLite is the
+default; switch the YAML `persistence.url` to `postgresql+asyncpg://...` for
+production. Every row carries `agent_slug` so multi-agent servers stay
+correctly partitioned.
 
 ## Observability
 
-Spans are emitted with the OTel GenAI semantic conventions (2025) and written one-per-line to `traces/<service>.jsonl`. Sensitive headers (`Authorization`, `x-api-key`, `cookie`, prompt/response text) are redacted at export time. Switch the exporter to `otlp` to ship to Honeycomb, Datadog, etc.
+One `TracerProvider` per server; spans carry an `agent.slug` attribute so
+multi-agent logs filter cleanly. Sensitive headers and prompt / response text
+are redacted at export time. Switch the exporter to `otlp` to ship to
+Honeycomb, Datadog, etc.
 
 ## Authentication
 
-When `authentication.type` is `bearer` or `api_key`, every endpoint except `/health` and `/.well-known/…` is gated; the value comes from the env var named in `value_env`. The Agent Card exposes the matching `securitySchemes` so clients know how to authenticate.
+Two independent surfaces:
+
+* `agents[*].authentication` gates the per-agent A2A routes (`/agents/<slug>/...`).
+* `admin.authentication` gates the admin REST surface (`/admin/...`).
+
+In both cases, set `type: bearer` (or `api_key`) and `value_env: TOKEN_NAME`,
+then export the env var. `/health` and `/.well-known/agent-card.json` are
+always public.
 
 ## License
 

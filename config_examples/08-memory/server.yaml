@@ -1,0 +1,69 @@
+name: memory-server
+version: 0.1.0
+description: An assistant that remembers user facts across conversations.
+
+server:
+  host: 0.0.0.0
+  port: 9008
+
+persistence:
+  backend: sqlite
+  url: sqlite+aiosqlite:///./state/memory-server.db
+  run_migrations_on_start: true
+
+observability:
+  otel:
+    enabled: true
+    service_name: memory-server
+    exporter: jsonl
+    jsonl_path: traces/memory-server.jsonl
+
+admin:
+  enabled: true
+
+agents:
+  - slug: memory
+    name: memory-assistant
+    description: An assistant that remembers user facts across conversations.
+    model:
+      provider: openai-compatible
+      model: openai/gpt-oss-120b:free
+      api_key_env: OPENROUTER_API_KEY
+      base_url: https://openrouter.ai/api/v1
+      extra_headers:
+        HTTP-Referer: https://github.com/smorand/config-a2a
+        X-Title: config-a2a memory-assistant
+    pattern:
+      type: simple
+    prompts:
+      system_file: prompts/system.md
+    memory:
+      enabled: true
+      working:
+        strategy: sliding_summary
+        window: 12
+        summarize_every: 6
+      long_term:
+        store:
+          backend: sqlite
+        read:
+          when: first_turn
+          scopes: [user, agent]
+          top_k: 5
+          max_chars: 1200
+        write:
+          when: after_terminal
+          extract_with: llm
+          scope: infer
+    guardrails:
+      max_loops: 4
+      max_tokens: 8000
+      timeout_seconds: 120
+    skills:
+      - id: chat-with-memory
+        name: Chat with memory
+        description: Friendly chat that remembers stable facts about the user.
+        tags: [chat, memory]
+        examples:
+          - "My favourite colour is purple."
+          - "What's my favourite colour?"

@@ -1,4 +1,4 @@
-"""YAML loader with ${ENV} substitution and relative-path resolution."""
+"""YAML loader with ``${ENV}`` substitution, path resolution, and inheritance."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from typing import Any
 
 import yaml
 
-from config_a2a.config.models import AgentConfig
+from config_a2a.config.models import AgentConfig, ServerConfig
 
 _ENV_PATTERN = re.compile(r"\$\{([A-Z_][A-Z0-9_]*)\}")
 
@@ -19,7 +19,7 @@ class ConfigError(Exception):
 
 
 def _substitute_env(value: Any) -> Any:
-    """Recursively expand ${VAR} references inside string leaves."""
+    """Recursively expand ``${VAR}`` references inside string leaves."""
     if isinstance(value, str):
 
         def repl(match: re.Match[str]) -> str:
@@ -50,12 +50,7 @@ _PATH_KEYS: frozenset[str] = frozenset(
 
 
 def _resolve_paths(value: Any, base_dir: Path) -> Any:
-    """Make every known path-leaf absolute against ``base_dir``.
-
-    Path keys live in a small, explicit allowlist so that user-supplied dict
-    keys (e.g. tool names inside ``confirmations.per_tool``) are not mistaken
-    for path leaves.
-    """
+    """Make every known path-leaf absolute against ``base_dir``."""
     if isinstance(value, dict):
         resolved: dict[str, Any] = {}
         for key, child in value.items():
@@ -73,8 +68,36 @@ def _resolve_paths(value: Any, base_dir: Path) -> Any:
     return value
 
 
+def load_server_config(path: Path) -> ServerConfig:
+    """Load and validate a server configuration from ``path``.
+
+    The YAML must describe a top-level ``ServerConfig`` (with an optional
+    ``agents:`` list). All slug + inheritance invariants are enforced inside
+    ``ServerConfig.model_validate``.
+    """
+    if not path.exists():
+        raise ConfigError(f"Configuration file not found: {path}")
+    try:
+        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except yaml.YAMLError as exc:
+        raise ConfigError(f"Invalid YAML in {path}: {exc}") from exc
+    if not isinstance(raw, dict):
+        raise ConfigError(f"Top-level YAML must be a mapping in {path}, got {type(raw).__name__}")
+    base_dir = path.parent.resolve()
+    raw = _substitute_env(raw)
+    raw = _resolve_paths(raw, base_dir)
+    try:
+        return ServerConfig.model_validate(raw)
+    except Exception as exc:  # pylint: disable=broad-except
+        raise ConfigError(f"Invalid configuration in {path}: {exc}") from exc
+
+
 def load_agent_config(path: Path) -> AgentConfig:
-    """Load and validate an agent configuration from ``path``."""
+    """Load a single ``AgentConfig`` from a YAML file.
+
+    Used by the Handoff pattern's ``agent_ref`` mechanism to spawn in-process
+    sub-agents. The YAML must be a single agent (no ``agents:`` list).
+    """
     if not path.exists():
         raise ConfigError(f"Configuration file not found: {path}")
     try:
@@ -89,4 +112,7 @@ def load_agent_config(path: Path) -> AgentConfig:
     try:
         return AgentConfig.model_validate(raw)
     except Exception as exc:  # pylint: disable=broad-except
-        raise ConfigError(f"Invalid configuration in {path}: {exc}") from exc
+        raise ConfigError(f"Invalid agent configuration in {path}: {exc}") from exc
+
+
+__all__ = ["ConfigError", "load_agent_config", "load_server_config"]

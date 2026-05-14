@@ -43,9 +43,10 @@ class MemoryOrchestrator:
         read_cfg = self.config.memory.long_term.read
         if read_cfg.when == "none":
             return ""
+        assert self.config.slug is not None
         records = await self.store.search(
             query=user_text,
-            agent_name=self.config.name,
+            agent_slug=self.config.slug,
             scopes=list(read_cfg.scopes),
             top_k=read_cfg.top_k,
             user_id=user_id,
@@ -64,14 +65,10 @@ class MemoryOrchestrator:
             return ""
         return "Relevant memory from past interactions:\n" + "\n".join(lines)
 
-    async def maybe_summarise(
-        self, messages: list[ChatMessage], *, provider: LlmProvider
-    ) -> list[ChatMessage]:
+    async def maybe_summarise(self, messages: list[ChatMessage], *, provider: LlmProvider) -> list[ChatMessage]:
         if not self.config.memory.enabled:
             return messages
-        return await apply_sliding_summary(
-            messages, config=self.config.memory.working, provider=provider
-        )
+        return await apply_sliding_summary(messages, config=self.config.memory.working, provider=provider)
 
     async def harvest(
         self,
@@ -93,10 +90,11 @@ class MemoryOrchestrator:
             assistant_text=assistant_text,
             forced_scope=forced,
         )
+        assert self.config.slug is not None
         for record in records:
             if record.scope == "user" and user_id:
                 record.user_id = user_id
-            await self.store.write(record, agent_name=self.config.name)
+            await self.store.write(record, agent_slug=self.config.slug, agent_name=self.config.name)
         return len(records)
 
 
@@ -112,9 +110,7 @@ def build_orchestrator(
         return MemoryOrchestrator(config, store=InMemoryStore())
     if backend == "sqlite":
         if session_factory is None:
-            raise ValueError(
-                "sqlite memory backend needs a session_factory; pass it from persistence layer"
-            )
+            raise ValueError("sqlite memory backend needs a session_factory; pass it from persistence layer")
         return MemoryOrchestrator(config, store=SqlAlchemyStore(session_factory))
     raise ValueError(f"unknown memory backend: {backend}")
 

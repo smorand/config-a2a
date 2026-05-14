@@ -124,9 +124,7 @@ class OpenAiCompatibleProvider(LlmProvider):
                 arguments = json.loads(function.get("arguments") or "{}")
             except json.JSONDecodeError:
                 arguments = {}
-            tool_calls.append(
-                ToolCall(id=raw.get("id") or "", name=function.get("name") or "", arguments=arguments)
-            )
+            tool_calls.append(ToolCall(id=raw.get("id") or "", name=function.get("name") or "", arguments=arguments))
         usage = data.get("usage") or {}
         return ChatResponse(
             content=content,
@@ -146,6 +144,4 @@ def build_openai_compatible(
 ) -> OpenAiCompatibleProvider:
     """Factory helper that resolves the API key from the environment."""
     api_key = os.environ.get(api_key_env) if api_key_env else None
-    return OpenAiCompatibleProvider(
-        model=model, base_url=base_url, api_key=api_key, extra_headers=extra_headers
-    )
+    return OpenAiCompatibleProvider(model=model, base_url=base_url, api_key=api_key, extra_headers=extra_headers)

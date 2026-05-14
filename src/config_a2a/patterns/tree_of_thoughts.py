@@ -70,8 +70,7 @@ async def run_tree_of_thoughts(ctx: ExecutionContext) -> None:
             frontier = candidates[: pattern.top_k]
         await emit_thinking(
             ctx,
-            f"ToT depth {depth + 1}: kept {len(frontier)} of {len(candidates)} "
-            f"(top score {frontier[0].score:.1f})",
+            f"ToT depth {depth + 1}: kept {len(frontier)} of {len(candidates)} " f"(top score {frontier[0].score:.1f})",
         )
 
     best = frontier[0]
@@ -107,9 +106,7 @@ async def _expand(
     return [item for sublist in nested for item in sublist]
 
 
-async def _score(
-    ctx: ExecutionContext, candidates: list[_Thought], evaluator_prompt: str
-) -> None:
+async def _score(ctx: ExecutionContext, candidates: list[_Thought], evaluator_prompt: str) -> None:
     async def _rate(thought: _Thought) -> None:
         messages = [
             ChatMessage(role="system", content=evaluator_prompt),

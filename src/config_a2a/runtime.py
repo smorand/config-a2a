@@ -12,7 +12,7 @@ from config_a2a.a2a.sse import SseEmitter
 from config_a2a.config.models import AgentConfig
 from config_a2a.config.prompts import resolve_system_prompt
 from config_a2a.mcp.client import McpRegistry
-from config_a2a.memory import MemoryOrchestrator, build_orchestrator
+from config_a2a.memory import MemoryOrchestrator
 from config_a2a.patterns import ExecutionContext, get_runner
 from config_a2a.patterns.base import PatternError
 from config_a2a.providers.base import LlmProvider
@@ -43,9 +43,7 @@ class TaskStore(Protocol):  # pragma: no cover — structural
     ) -> None: ...
     async def append_message(self, task_id: str, message: Message) -> None: ...
     async def list_recent(self, limit: int = ...) -> list[Any]: ...
-    async def record_step(
-        self, *, task_id: str, kind: str, payload: dict[str, Any], summary: str = ...
-    ) -> None: ...
+    async def record_step(self, *, task_id: str, kind: str, payload: dict[str, Any], summary: str = ...) -> None: ...
 
 
 class InMemoryTaskStore:
@@ -120,9 +118,7 @@ class AgentRuntime:
         self.provider: LlmProvider | None = provider
         self.mcp = mcp_registry or McpRegistry()
         self.memory: MemoryOrchestrator = memory or MemoryOrchestrator(config, store=None)
-        self._system_prompt = resolve_system_prompt(
-            config.prompts.system, config.prompts.system_file, default=""
-        )
+        self._system_prompt = resolve_system_prompt(config.prompts.system, config.prompts.system_file, default="")
 
     async def discover_tools(self) -> None:
         """Run once at process start to populate the MCP registry."""
@@ -203,6 +199,7 @@ class AgentRuntime:
                         provider=self.config.model.provider,
                         model=self.config.model.model,
                     ),
+                    "agent.slug": self.config.slug or "",
                     "agent.name": self.config.name,
                     "agent.version": self.config.version,
                     "a2a.task_id": task.id,
@@ -213,9 +210,7 @@ class AgentRuntime:
             # Post-pattern hook: harvest facts on a terminal-success state.
             await self._harvest_if_complete(task.id, user_text)
         except PatternError as exc:
-            failed = TaskStatus(
-                state="TASK_STATE_FAILED", message=text_message("ROLE_AGENT", f"pattern error: {exc}")
-            )
+            failed = TaskStatus(state="TASK_STATE_FAILED", message=text_message("ROLE_AGENT", f"pattern error: {exc}"))
             await self.tasks.update_status(task.id, failed)
             await emitter.emit(
                 {

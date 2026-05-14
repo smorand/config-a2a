@@ -1,21 +1,17 @@
-"""Iter 8: Handoff (local + remote) and Orchestrate (parallel) via scripted provider."""
+"""Handoff (local + remote) and Orchestrate (parallel) via scripted provider."""
 
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from typing import Any
 
 from fastapi.testclient import TestClient
 
 from config_a2a.a2a import client as a2a_client
-from config_a2a.api import create_app
-from config_a2a.config.loader import load_agent_config
+from config_a2a.api import create_app_for_runtime
 from config_a2a.providers.base import ChatRequest, ChatResponse, LlmProvider, TokenUsage
 from config_a2a.runtime import AgentRuntime
-
-EX_HANDOFF = Path(__file__).resolve().parents[2] / "config_examples" / "04-handoff" / "router.yaml"
-EX_ORCH = Path(__file__).resolve().parents[2] / "config_examples" / "05-orchestrate" / "agent.yaml"
+from tests.unit.conftest import load_single_agent
 
 
 class _Scripted(LlmProvider):
@@ -44,17 +40,16 @@ def _final(body: str) -> dict[str, Any]:
 
 
 def test_handoff_local_subagent() -> None:
-    config = load_agent_config(EX_HANDOFF)
-    # Router picks 'math' → sub-agent (math.yaml) runs Simple and returns text.
+    _, router, prefix = load_single_agent("04-handoff")
     scripted = [
         ChatResponse(content='{"target": "math"}', usage=TokenUsage(input_tokens=1, output_tokens=1)),
         ChatResponse(content="17 * 23 = 391.", usage=TokenUsage(input_tokens=2, output_tokens=2)),
     ]
-    runtime = AgentRuntime(config, provider=_Scripted(scripted))
-    client = TestClient(create_app(runtime))
+    runtime = AgentRuntime(router, provider=_Scripted(scripted))
+    client = TestClient(create_app_for_runtime(runtime))
     with client.stream(
         "POST",
-        "/message:stream",
+        f"{prefix}/message:stream",
         json={"message": {"messageId": "h1", "role": "ROLE_USER", "parts": [{"text": "17 * 23?"}]}},
     ) as response:
         body = "".join(response.iter_text())
@@ -65,7 +60,7 @@ def test_handoff_local_subagent() -> None:
 
 
 def test_orchestrate_parallel_with_mocked_remote(monkeypatch) -> None:
-    config = load_agent_config(EX_ORCH)
+    _, aggregator, prefix = load_single_agent("05-orchestrate")
     captured_urls: list[str] = []
 
     async def fake_send(url: str, text: str, **kwargs):  # noqa: ARG001
@@ -80,17 +75,16 @@ def test_orchestrate_parallel_with_mocked_remote(monkeypatch) -> None:
         )
 
     monkeypatch.setattr(a2a_client, "send_text", fake_send)
-    # Also need to patch the import inside orchestrate.py since it does `from config_a2a.a2a.client import send_text`.
     from config_a2a.patterns import orchestrate as orch_mod
 
     monkeypatch.setattr(orch_mod, "send_text", fake_send)
 
     scripted = [ChatResponse(content="synthesised reply", usage=TokenUsage(input_tokens=1, output_tokens=1))]
-    runtime = AgentRuntime(config, provider=_Scripted(scripted))
-    client = TestClient(create_app(runtime))
+    runtime = AgentRuntime(aggregator, provider=_Scripted(scripted))
+    client = TestClient(create_app_for_runtime(runtime))
     with client.stream(
         "POST",
-        "/message:stream",
+        f"{prefix}/message:stream",
         json={"message": {"messageId": "o1", "role": "ROLE_USER", "parts": [{"text": "go"}]}},
     ) as response:
         body = "".join(response.iter_text())
@@ -98,4 +92,4 @@ def test_orchestrate_parallel_with_mocked_remote(monkeypatch) -> None:
     assert final["statusUpdate"]["status"]["state"] == "TASK_STATE_COMPLETED"
     text = final["statusUpdate"]["status"]["message"]["parts"][0]["text"]
     assert "synthesised reply" in text
-    assert len(captured_urls) == 2  # both remote agents called
+    assert len(captured_urls) == 2

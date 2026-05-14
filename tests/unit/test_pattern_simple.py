@@ -1,19 +1,16 @@
-"""Iter 2: the Simple pattern produces a COMPLETED task from a stubbed provider."""
+"""The Simple pattern produces a COMPLETED task from a stubbed provider."""
 
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
-from config_a2a.api import create_app
-from config_a2a.config.loader import load_agent_config
+from config_a2a.api import create_app_for_runtime
 from config_a2a.providers.base import ChatRequest, ChatResponse, LlmProvider, TokenUsage
 from config_a2a.runtime import AgentRuntime
-
-EXAMPLE = Path(__file__).resolve().parents[2] / "config_examples" / "01-simple" / "agent.yaml"
+from tests.unit.conftest import load_single_agent
 
 
 class _StubProvider(LlmProvider):
@@ -32,26 +29,21 @@ class _StubProvider(LlmProvider):
 
 
 @pytest.fixture()
-def client_with_stub() -> tuple[TestClient, _StubProvider]:
-    config = load_agent_config(EXAMPLE)
+def client_with_stub() -> tuple[TestClient, _StubProvider, str]:
+    _, agent, prefix = load_single_agent("01-simple")
     provider = _StubProvider("Bonjour ! Comment puis-je vous aider ?")
-    runtime = AgentRuntime(config, provider=provider)
-    return TestClient(create_app(runtime)), provider
+    runtime = AgentRuntime(agent, provider=provider)
+    return TestClient(create_app_for_runtime(runtime)), provider, prefix
 
 
-def test_simple_pattern_completes_stream(client_with_stub: tuple[TestClient, _StubProvider]) -> None:
-    client, provider = client_with_stub
-    payload = {
-        "message": {
-            "messageId": "m-1",
-            "role": "ROLE_USER",
-            "parts": [{"text": "salut"}],
-        }
-    }
-    with client.stream("POST", "/message:stream", json=payload) as response:
+def test_simple_pattern_completes_stream(
+    client_with_stub: tuple[TestClient, _StubProvider, str],
+) -> None:
+    client, provider, prefix = client_with_stub
+    payload = {"message": {"messageId": "m-1", "role": "ROLE_USER", "parts": [{"text": "salut"}]}}
+    with client.stream("POST", f"{prefix}/message:stream", json=payload) as response:
         assert response.status_code == 200
         body = "".join(response.iter_text())
-    # Last data: line is the final statusUpdate with COMPLETED state and assistant text.
     blocks = [b for b in body.split("\n\n") if b.strip()]
     final_data = next(
         json.loads(line[len("data: ") :])
@@ -61,24 +53,19 @@ def test_simple_pattern_completes_stream(client_with_stub: tuple[TestClient, _St
     )
     assert final_data["statusUpdate"]["status"]["state"] == "TASK_STATE_COMPLETED"
     assert "Bonjour" in final_data["statusUpdate"]["status"]["message"]["parts"][0]["text"]
-    assert provider.calls  # provider was actually called
-    # System prompt was inserted from the example's prompts/system.md
+    assert provider.calls
     first_call = provider.calls[0]
     assert first_call.messages[0].role == "system"
     assert "friendly assistant" in first_call.messages[0].content
 
 
-def test_simple_pattern_send_endpoint(client_with_stub: tuple[TestClient, _StubProvider]) -> None:
-    client, _ = client_with_stub
+def test_simple_pattern_send_endpoint(
+    client_with_stub: tuple[TestClient, _StubProvider, str],
+) -> None:
+    client, _, prefix = client_with_stub
     response = client.post(
-        "/message:send",
-        json={
-            "message": {
-                "messageId": "m-2",
-                "role": "ROLE_USER",
-                "parts": [{"text": "salut"}],
-            }
-        },
+        f"{prefix}/message:send",
+        json={"message": {"messageId": "m-2", "role": "ROLE_USER", "parts": [{"text": "salut"}]}},
     )
     assert response.status_code == 200
     task = response.json()

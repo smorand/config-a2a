@@ -1,0 +1,45 @@
+name: debate-server
+version: 0.1.0
+description: A pro/con debate agent followed by a judge verdict.
+
+server:
+  host: 0.0.0.0
+  port: 9006
+
+persistence:
+  backend: sqlite
+  url: sqlite+aiosqlite:///./state/debate-server.db
+
+admin:
+  enabled: true
+
+agents:
+  - slug: debate
+    name: debate-court
+    description: A pro/con debate agent followed by a judge verdict.
+    model:
+      provider: openai-compatible
+      model: openrouter/auto:free
+      api_key_env: OPENROUTER_API_KEY
+      base_url: https://openrouter.ai/api/v1
+    pattern:
+      type: debate
+      rounds: 2
+      debaters:
+        - name: pro
+          prompt_file: prompts/pro.md
+        - name: con
+          prompt_file: prompts/con.md
+      judge:
+        prompt_file: prompts/judge.md
+    prompts:
+      system: |
+        You orchestrate a structured debate between two perspectives.
+    guardrails:
+      max_loops: 10
+      max_tokens: 24000
+      timeout_seconds: 300
+    skills:
+      - id: debate
+        name: Debate
+        description: Pro vs Con across N rounds, then a judge verdict.

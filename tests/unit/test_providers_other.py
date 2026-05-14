@@ -52,9 +52,7 @@ async def test_anthropic_serialises_messages_and_tools() -> None:
 
 
 async def test_google_serialises_contents_and_system() -> None:
-    provider = GoogleGeminiProvider(
-        model="gemini-x", api_key="gk-1", base_url="https://gen.test/v1beta"
-    )
+    provider = GoogleGeminiProvider(model="gemini-x", api_key="gk-1", base_url="https://gen.test/v1beta")
     try:
         with respx.mock() as router:
             route = router.post("https://gen.test/v1beta/models/gemini-x:generateContent").mock(

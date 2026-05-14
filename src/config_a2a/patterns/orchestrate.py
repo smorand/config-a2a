@@ -34,9 +34,7 @@ async def run_orchestrate(ctx: ExecutionContext) -> None:
     await emit_thinking(ctx, f"orchestrate: {pattern.mode} fan-out over {len(pattern.agents)} agents")
 
     if pattern.mode == "parallel":
-        results = await asyncio.gather(
-            *(_dispatch(agent, ctx) for agent in pattern.agents), return_exceptions=True
-        )
+        results = await asyncio.gather(*(_dispatch(agent, ctx) for agent in pattern.agents), return_exceptions=True)
     else:
         results = []
         for agent in pattern.agents:

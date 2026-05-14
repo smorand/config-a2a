@@ -1,0 +1,45 @@
+name: orchestrate-server
+version: 0.1.0
+description: Fans out a question to remote A2A agents and synthesises one answer.
+
+server:
+  host: 0.0.0.0
+  port: 9005
+
+persistence:
+  backend: sqlite
+  url: sqlite+aiosqlite:///./state/orchestrate-server.db
+
+admin:
+  enabled: true
+
+agents:
+  - slug: aggregator
+    name: orchestrate-aggregator
+    description: Fans out a question to remote A2A agents and synthesises one answer.
+    model:
+      provider: openai-compatible
+      model: openrouter/auto:free
+      api_key_env: OPENROUTER_API_KEY
+      base_url: https://openrouter.ai/api/v1
+    pattern:
+      type: orchestrate
+      mode: parallel
+      agents:
+        - name: simple-1
+          a2a_url: http://localhost:9001/agents/simple
+        - name: simple-2
+          a2a_url: http://localhost:9001/agents/simple
+      aggregator:
+        prompt_file: prompts/aggregator.md
+    prompts:
+      system: |
+        You orchestrate a panel of remote experts and present their consensus.
+    guardrails:
+      max_loops: 10
+      max_tokens: 16000
+      timeout_seconds: 240
+    skills:
+      - id: aggregate
+        name: Multi-agent aggregator
+        description: Queries several A2A agents in parallel and reconciles their answers.
