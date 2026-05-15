@@ -7,14 +7,14 @@ Compact index. Topic-focused notes live in `.agent_docs/`; load only what you ne
 Headless **multi-agent** A2A server factory. One YAML file (`ServerConfig`)
 boots one FastAPI process exposing N agents under `/agents/<slug>`, plus an
 admin REST surface for hot load / reload / unload. Started with
-`uv run agent --config server.yaml [--host H] [--port P]`. Python 3.13,
+`uv run agent --config agents.yaml [--host H] [--port P]`. Python 3.13,
 managed with `uv`. Talks to `web-a2a` over the A2A v1.0 wire (per-agent URL).
 
 ## Key commands
 
 ```bash
 uv sync --extra dev
-uv run agent --config <server.yaml> [--host H] [--port P] [--check]
+uv run agent --config <agents.yaml> [--host H] [--port P] [--check]
 uv run pytest tests/unit
 RUN_E2E=1 uv run pytest tests/e2e          # needs OPENROUTER_API_KEY
 uv run alembic upgrade head                # SQLite by default
@@ -49,7 +49,7 @@ src/config_a2a/
   observability/{otel,jsonl_exporter}.py
   persistence/{models,engine,repository,store}.py
 alembic/                    # migrations (0001 initial, 0002 memory, 0003 multi-agent)
-config_examples/*/server.yaml   # one runnable server per directory
+config_examples/*/agents.yaml   # one runnable server per directory
 tests/unit / tests/e2e / tests/fixtures
 ```
 

@@ -103,14 +103,14 @@ def test_agent_can_override_authentication() -> None:
 
 
 def test_load_handoff_example_three_agents() -> None:
-    path = Path(__file__).resolve().parents[2] / "config_examples" / "04-handoff" / "server.yaml"
+    path = Path(__file__).resolve().parents[2] / "config_examples" / "04-handoff" / "agents.yaml"
     server = load_server_config(path)
     slugs = [a.slug for a in server.agents]
     assert slugs == ["router", "math", "chat"]
 
 
 def test_load_coding_agent_example_nine_agents() -> None:
-    path = Path(__file__).resolve().parents[2] / "config_examples" / "08-coding-agent" / "server.yaml"
+    path = Path(__file__).resolve().parents[2] / "config_examples" / "08-coding-agent" / "agents.yaml"
     server = load_server_config(path)
     assert len(server.agents) == 9
     assert {a.slug for a in server.agents} == {
@@ -160,7 +160,7 @@ agents:
     pattern: {type: simple}
     bogus_field: 1
 """
-    path = tmp_path / "server.yaml"
+    path = tmp_path / "agents.yaml"
     path.write_text(yaml_text)
     with pytest.raises(ConfigError):
         load_server_config(path)

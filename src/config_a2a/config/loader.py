@@ -83,6 +83,11 @@ def load_server_config(path: Path) -> ServerConfig:
         raise ConfigError(f"Invalid YAML in {path}: {exc}") from exc
     if not isinstance(raw, dict):
         raise ConfigError(f"Top-level YAML must be a mapping in {path}, got {type(raw).__name__}")
+    # Top-level keys starting with ``_`` are reserved for YAML anchor stubs
+    # (e.g. ``_anchors:``): the parser still resolves the anchors, but the
+    # stub key itself must not reach pydantic since ServerConfig forbids
+    # extra keys.
+    raw = {k: v for k, v in raw.items() if not (isinstance(k, str) and k.startswith("_"))}
     base_dir = path.parent.resolve()
     raw = _substitute_env(raw)
     raw = _resolve_paths(raw, base_dir)

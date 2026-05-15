@@ -3,7 +3,7 @@
 Headless A2A (Agent-to-Agent) **multi-agent server factory** driven by YAML.
 
 One YAML file describes a FastAPI process and the agents it hosts. Run
-`uv run agent --config server.yaml` and you get one HTTP port serving N
+`uv run agent --config agents.yaml` and you get one HTTP port serving N
 A2A 1.0 agents under `/agents/<slug>`, plus an admin REST surface for hot
 load / reload / unload. No UI, no boilerplate.
 
@@ -43,7 +43,7 @@ All providers go through `httpx.AsyncClient` directly; no vendor SDK pinning.
 ```bash
 uv sync --extra dev
 export OPENROUTER_API_KEY=...
-uv run agent --config config_examples/01-simple/server.yaml --port 9001
+uv run agent --config config_examples/01-simple/agents.yaml --port 9001
 ```
 
 Then in another shell:

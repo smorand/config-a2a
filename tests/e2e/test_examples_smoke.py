@@ -26,7 +26,7 @@ def _require_openrouter() -> None:
 
 
 def _client_for(example: str) -> tuple[TestClient, str]:
-    server = load_server_config(EXAMPLES_DIR / example / "server.yaml")
+    server = load_server_config(EXAMPLES_DIR / example / "agents.yaml")
     client = TestClient(create_app(server))
     prefix = f"/agents/{server.agents[0].slug}"
     return client, prefix

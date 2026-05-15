@@ -14,7 +14,7 @@ from config_a2a.api import create_app
 from config_a2a.config.loader import load_server_config
 from config_a2a.persistence import run_migrations
 
-EXAMPLE = Path(__file__).resolve().parents[2] / "config_examples" / "08-memory" / "server.yaml"
+EXAMPLE = Path(__file__).resolve().parents[2] / "config_examples" / "08-memory" / "agents.yaml"
 
 pytestmark = pytest.mark.e2e
 

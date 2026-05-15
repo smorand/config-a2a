@@ -1,7 +1,7 @@
 """Shared test helpers for the unit suite.
 
 Adds an ``agent_path`` helper that returns the path to a per-example
-``server.yaml`` so tests can stay terse, and a ``load_single_agent`` helper
+``agents.yaml`` so tests can stay terse, and a ``load_single_agent`` helper
 that yields the (server, agent, prefix) tuple used by most test files.
 """
 
@@ -16,7 +16,7 @@ EXAMPLES = Path(__file__).resolve().parents[2] / "config_examples"
 
 
 def example_yaml(name: str) -> Path:
-    return EXAMPLES / name / "server.yaml"
+    return EXAMPLES / name / "agents.yaml"
 
 
 def load_single_agent(name: str) -> tuple[ServerConfig, AgentConfig, str]:

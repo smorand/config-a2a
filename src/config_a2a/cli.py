@@ -1,4 +1,4 @@
-"""CLI entry point: ``agent --config server.yaml [--host H] [--port P]``."""
+"""CLI entry point: ``agent --config agents.yaml [--host H] [--port P]``."""
 
 from __future__ import annotations
 

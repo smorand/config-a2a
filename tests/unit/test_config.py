@@ -45,7 +45,7 @@ agents:
     pattern:
       type: simple
 """
-    target = tmp_path / "server.yaml"
+    target = tmp_path / "agents.yaml"
     target.write_text(yaml_text, encoding="utf-8")
     server = load_server_config(target)
     agent = server.agents[0]
