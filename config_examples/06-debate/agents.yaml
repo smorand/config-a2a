@@ -29,7 +29,7 @@ agents:
         - name: pro
           prompt_file: prompts/pro.md
         - name: con
-          prompt_file: prompts/con.md
+          prompt_file: prompts/against.md
       judge:
         prompt_file: prompts/judge.md
     prompts:
