@@ -42,6 +42,9 @@ src/config_a2a/
   runtime.py                # AgentRuntime composes config / provider / mcp / tasks
   config/{models,loader,prompts}.py
   providers/{base,openai_compat,anthropic,google,vertex,registry}.py
+  identity.py                # per-request end-user ContextVar + ASGI capture middleware
+  config/juicefs.py          # JuiceFSConfig model (sugar for an mcp-juicefs server)
+  juicefs/binding.py         # desugar juicefs: -> McpStreamableHttpServer + prompt fragment
   mcp/{client,stdio,streamable_http,sse,tool_format}.py
   patterns/{simple,react,plan_execute,handoff,orchestrate,debate,tree_of_thoughts}.py
   a2a/{card,envelope,sse,routes,client}.py
@@ -63,3 +66,4 @@ tests/unit / tests/e2e / tests/fixtures
 * `.agent_docs/observability.md` — OTel spans, redaction rules, OTLP switch.
 * `.agent_docs/persistence.md` — schema, Alembic, Postgres vs SQLite.
 * `.agent_docs/memory.md` — `memory:` block, hook flow, store interface, extractor, scopes.
+* `.agent_docs/juicefs.md` — native `juicefs:` block, identity forwarding, `mount_id` convention, per-conversation default. Design: `specs/juicefs-integration.md`.

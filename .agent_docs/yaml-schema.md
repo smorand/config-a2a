@@ -97,6 +97,14 @@ agents: []                       # one entry per mounted agent (may be empty)
     mcp_servers: [...]
     filters: { include: [...], exclude: [...] }
 
+  juicefs:                       # optional; sugar over an mcp-juicefs streamable-http server
+    url: ${JUICEFS_MCP_URL}      # full field reference in .agent_docs/juicefs.md
+    name: juicefs
+    identity: { mode: forwarded_user, forwarded_user_header: X-Forwarded-User }
+    default_mount_id: perso-alice
+    service_identity: svc-config-a2a
+    filters: { include: [], exclude: [] }
+
   guardrails:
     max_loops: 30
     max_tokens: 200000

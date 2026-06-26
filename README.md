@@ -38,6 +38,15 @@ All providers go through `httpx.AsyncClient` directly; no vendor SDK pinning.
 
 * `stdio`, `streamable-http`, `sse` (legacy)
 
+### Native JuiceFS
+
+A `juicefs:` block on an agent is sugar over a `streamable-http` MCP server
+(`mcp-juicefs`) with **per-request end-user identity forwarding**
+(`X-Forwarded-User`, v1 trusted network) and an optional `default_mount_id`
+surfaced to the model as its current project. Volumes are provisioned out of
+band; the runtime stays 100% MCP over HTTP (no JuiceFS SDK). See
+`.agent_docs/juicefs.md` and `specs/juicefs-integration.md`.
+
 ## Quickstart
 
 ```bash
@@ -136,6 +145,7 @@ See `.agent_docs/a2a-protocol.md` for response shapes.
 | `config_examples/07-tree-of-thoughts`   | 1      | Branch / evaluate / prune                              |
 | `config_examples/08-memory`             | 1      | User-fact recall across independent contexts           |
 | `config_examples/08-coding-agent`       | 9      | 8-phase ticket-to-PR pipeline plus orchestrator        |
+| `config_examples/09-juicefs`            | 1      | Native `juicefs:` block, per-user identity forwarding  |
 
 ## Development
 
