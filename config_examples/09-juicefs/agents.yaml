@@ -1,0 +1,67 @@
+name: juicefs-server
+version: 0.1.0
+description: An agent with native JuiceFS file tools and per-user identity forwarding.
+
+server:
+  host: 0.0.0.0
+  port: 9009
+
+persistence:
+  backend: sqlite
+  url: sqlite+aiosqlite:///./state/juicefs-server.db
+  run_migrations_on_start: true
+
+observability:
+  otel:
+    enabled: true
+    service_name: juicefs-server
+    exporter: jsonl
+    jsonl_path: traces/juicefs-server.jsonl
+
+admin:
+  enabled: true
+
+agents:
+  - slug: files
+    name: juicefs-assistant
+    description: Reads and writes files on the user's JuiceFS volumes.
+    model:
+      provider: openai-compatible
+      model: openrouter/auto:free
+      api_key_env: OPENROUTER_API_KEY
+      base_url: https://openrouter.ai/api/v1
+      extra_headers:
+        HTTP-Referer: https://github.com/smorand/config-a2a
+        X-Title: config-a2a juicefs-assistant
+    pattern:
+      type: react
+      max_iterations: 8
+    prompts:
+      system_file: prompts/system.md
+    # Native JuiceFS block. Desugared at load time into a streamable-http MCP
+    # server named `juicefs` with per-request identity forwarding enabled.
+    juicefs:
+      url: ${JUICEFS_MCP_URL}            # e.g. http://localhost:8000/mcp
+      name: juicefs
+      identity:
+        mode: forwarded_user            # v1: trusted network, X-Forwarded-User
+        forwarded_user_header: X-Forwarded-User
+      default_mount_id: ${JUICEFS_DEFAULT_MOUNT_ID}   # optional "current project"
+      service_identity: ${JUICEFS_SERVICE_IDENTITY}   # used for tool discovery
+    confirmations:
+      destructive_hint: prompt
+      per_tool:
+        juicefs.fs.delete: prompt
+        juicefs.fs.move: prompt
+    guardrails:
+      max_loops: 12
+      max_tokens: 16000
+      timeout_seconds: 180
+    skills:
+      - id: files
+        name: JuiceFS files
+        description: List, read, and (with confirmation) modify files on a JuiceFS volume.
+        tags: [filesystem, juicefs]
+        examples:
+          - "List my JuiceFS volumes"
+          - "Read report.md from my marketing project"
