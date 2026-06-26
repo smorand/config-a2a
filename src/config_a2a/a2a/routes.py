@@ -23,6 +23,16 @@ def _user_text(message: Message) -> str:
     return "\n".join(chunks).strip()
 
 
+def _mount_id(message: Message) -> str | None:
+    """Per-message JuiceFS ``mount_id`` override carried in A2A metadata.
+
+    Lets another UI / API caller pick the active volume per conversation without
+    editing the agent YAML. Falls back to the agent's ``default_mount_id``.
+    """
+    value = message.metadata.get("mount_id")
+    return value.strip() if isinstance(value, str) and value.strip() else None
+
+
 def _base_url_for_agent(request: Request, slug: str) -> str:
     root = str(request.base_url).rstrip("/")
     return f"{root}/agents/{slug}"
@@ -125,6 +135,7 @@ def create_router(slug: str) -> APIRouter:
         emitter = SseEmitter()
         user_text = _user_text(payload.message)
         skill_id = payload.message.skillId
+        mount_id = _mount_id(payload.message)
         await runtime.tasks.append_message(record.id, payload.message)
         import asyncio
 
@@ -132,7 +143,9 @@ def create_router(slug: str) -> APIRouter:
             async for _ in emitter.stream():
                 pass
 
-        producer = asyncio.create_task(runtime.run_message(user_text, emitter, record, skill_id=skill_id))
+        producer = asyncio.create_task(
+            runtime.run_message(user_text, emitter, record, skill_id=skill_id, mount_id=mount_id)
+        )
         consumer = asyncio.create_task(drain())
         await asyncio.gather(producer, consumer)
         refreshed = await runtime.tasks.get(record.id) or record
@@ -151,12 +164,13 @@ def create_router(slug: str) -> APIRouter:
         emitter = SseEmitter()
         user_text = _user_text(payload.message)
         skill_id = payload.message.skillId
+        mount_id = _mount_id(payload.message)
 
         import asyncio
 
         async def producer() -> None:
             try:
-                await runtime.run_message(user_text, emitter, record, skill_id=skill_id)
+                await runtime.run_message(user_text, emitter, record, skill_id=skill_id, mount_id=mount_id)
             except Exception as exc:  # pylint: disable=broad-except
                 failed = TaskStatus(
                     state="TASK_STATE_FAILED",

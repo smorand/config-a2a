@@ -11,6 +11,7 @@ from config_a2a.a2a.envelope import Message, Task, TaskStatus, text_message
 from config_a2a.a2a.sse import SseEmitter
 from config_a2a.config.models import AgentConfig
 from config_a2a.config.prompts import resolve_system_prompt
+from config_a2a.juicefs import juicefs_prompt_suffix
 from config_a2a.mcp.client import McpRegistry
 from config_a2a.memory import MemoryOrchestrator
 from config_a2a.patterns import ExecutionContext, get_runner
@@ -168,6 +169,7 @@ class AgentRuntime:
         task: Any,
         *,
         skill_id: str | None = None,
+        mount_id: str | None = None,
     ) -> None:
         # ``skill_id`` is piped through for layer-2 (per-skill overrides). The runtime
         # currently ignores it; validation happens at the A2A boundary.
@@ -183,6 +185,12 @@ class AgentRuntime:
 
         # Pre-pattern hook: inject relevant long-term memory into the system prompt.
         system_prompt = self._system_prompt
+        # JuiceFS hook: surface the mount_id convention and the current project.
+        # A per-message ``mount_id`` (A2A metadata) overrides ``default_mount_id``.
+        if self.config.juicefs is not None:
+            effective_mount = mount_id or self.config.juicefs.default_mount_id
+            suffix = juicefs_prompt_suffix(default_mount_id=effective_mount)
+            system_prompt = f"{system_prompt}\n\n{suffix}" if system_prompt else suffix
         if self.memory.enabled and self.config.memory.long_term.read.when != "none":
             injected = await self.memory.inject_long_term(user_text)
             if injected:
