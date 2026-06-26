@@ -11,10 +11,10 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 from starlette.testclient import TestClient
 
-from config_a2a.api import _resolve_inbound_user_header
+from config_a2a.a2a.sse import SseEmitter
 from config_a2a.config.juicefs import JuiceFSConfig
 from config_a2a.config.loader import load_server_config
-from config_a2a.config.models import AgentConfig, McpStreamableHttpServer
+from config_a2a.config.models import AgentConfig, McpStreamableHttpServer, ServerConfig, ToolFilters
 from config_a2a.identity import (
     DEFAULT_FORWARDED_USER_HEADER,
     IdentityCaptureMiddleware,
@@ -22,8 +22,7 @@ from config_a2a.identity import (
     current_user,
     reset_user,
 )
-from config_a2a.a2a.sse import SseEmitter
-from config_a2a.juicefs.binding import compile_juicefs, juicefs_prompt_suffix
+from config_a2a.juicefs.binding import compile_juicefs, juicefs_prompt_suffix, merge_filters
 from config_a2a.mcp.streamable_http import _request_headers
 from config_a2a.providers.base import ChatRequest, ChatResponse, LlmProvider, TokenUsage
 from config_a2a.runtime import AgentRuntime
@@ -90,6 +89,44 @@ def test_compile_juicefs_direct() -> None:
     assert server.forward_identity is True
     assert server.service_identity == "svc"
     assert server.headers == {}
+
+
+# --- filter merge -----------------------------------------------------------
+
+
+def test_merge_filters_unions_and_dedups() -> None:
+    base = ToolFilters(include=["juicefs.fs.read"], exclude=["*.delete"])
+    extra = ToolFilters(include=["juicefs.fs.read", "juicefs.fs.list"], exclude=["*.move"])
+    merged = merge_filters(base, extra)
+    assert merged.include == ["juicefs.fs.read", "juicefs.fs.list"]
+    assert merged.exclude == ["*.delete", "*.move"]
+
+
+def test_merge_filters_is_idempotent() -> None:
+    base = ToolFilters(include=["a"], exclude=["b"])
+    once = merge_filters(base, ToolFilters(include=["c"], exclude=["d"]))
+    twice = merge_filters(once, ToolFilters(include=["c"], exclude=["d"]))
+    assert once.model_dump() == twice.model_dump()
+
+
+def test_juicefs_filters_folded_into_tools_filters() -> None:
+    agent = AgentConfig.model_validate(
+        {
+            "name": "fsbot",
+            "model": {"provider": "openai-compatible", "model": "x"},
+            "pattern": {"type": "simple"},
+            "tools": {"filters": {"exclude": ["other.tool"]}},
+            "juicefs": {
+                "url": "http://h/mcp",
+                "filters": {"include": ["juicefs.fs.*"], "exclude": ["juicefs.fs.delete"]},
+            },
+        }
+    )
+    assert agent.tools.filters.include == ["juicefs.fs.*"]
+    assert agent.tools.filters.exclude == ["other.tool", "juicefs.fs.delete"]
+    # Idempotent on revalidation: no duplicate growth.
+    again = AgentConfig.model_validate(agent.model_dump())
+    assert again.tools.filters.exclude == ["other.tool", "juicefs.fs.delete"]
 
 
 # --- prompt injection -------------------------------------------------------
@@ -166,19 +203,25 @@ def test_middleware_custom_header_name() -> None:
     assert resp.json() == {"user": "carol"}
 
 
-# --- inbound header resolution ---------------------------------------------
+# --- server-level inbound identity header -----------------------------------
 
 
-def test_resolve_inbound_header_defaults_without_juicefs() -> None:
-    plain = AgentConfig.model_validate(
-        {"name": "p", "model": {"provider": "openai-compatible", "model": "x"}, "pattern": {"type": "simple"}}
+def test_server_identity_header_defaults() -> None:
+    server = ServerConfig.model_validate({"name": "s", "admin": {"enabled": True}})
+    assert server.identity.inbound_header == DEFAULT_FORWARDED_USER_HEADER
+
+
+def test_server_identity_header_override() -> None:
+    server = ServerConfig.model_validate(
+        {"name": "s", "admin": {"enabled": True}, "identity": {"inbound_header": "X-User"}}
     )
-    assert _resolve_inbound_user_header([plain]) == DEFAULT_FORWARDED_USER_HEADER
+    assert server.identity.inbound_header == "X-User"
 
 
-def test_resolve_inbound_header_from_juicefs_agent() -> None:
-    agent = _agent(identity={"forwarded_user_header": "X-User"})
-    assert _resolve_inbound_user_header([agent]) == "X-User"
+def test_server_identity_header_drives_middleware() -> None:
+    server = load_server_config(example_yaml("09-juicefs"))
+    client = TestClient(_identity_probe_app(server.identity.inbound_header))
+    assert client.get("/whoami", headers={"X-Forwarded-User": "dave"}).json() == {"user": "dave"}
 
 
 # --- example ----------------------------------------------------------------

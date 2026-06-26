@@ -39,6 +39,18 @@ class ServerBindConfig(_Strict):
     port: int = Field(default=9000, ge=1, le=65535)
 
 
+class ServerIdentityConfig(_Strict):
+    """How the end-user identity is captured at the A2A boundary (server-wide).
+
+    ``inbound_header`` names the trusted request header read by
+    ``IdentityCaptureMiddleware`` to identify the end user. The *outbound* header
+    forwarded to mcp-juicefs is configured per ``juicefs:`` block and is
+    independent of this setting.
+    """
+
+    inbound_header: str = "X-Forwarded-User"
+
+
 class PersistenceConfig(_Strict):
     backend: Literal["sqlite", "postgresql"] = "sqlite"
     url: str = "sqlite+aiosqlite:///./state/server.db"
@@ -410,11 +422,17 @@ class AgentConfig(_Strict):
         # Lazy import breaks the import cycle (binding imports this module for
         # ``McpStreamableHttpServer``). The forward ref is resolved by
         # ``config_a2a.config`` at package import time.
-        from config_a2a.juicefs.binding import compile_juicefs  # pylint: disable=import-outside-toplevel
+        from config_a2a.juicefs.binding import (  # pylint: disable=import-outside-toplevel
+            compile_juicefs,
+            merge_filters,
+        )
 
         compiled = compile_juicefs(self.juicefs)
         if not any(server.name == compiled.name for server in self.tools.mcp_servers):
             self.tools.mcp_servers.append(compiled)
+        # Fold the juicefs.filters into the agent-wide tools.filters (idempotent
+        # deduplicated union), so they apply uniformly during MCP discovery.
+        self.tools.filters = merge_filters(self.tools.filters, self.juicefs.filters)
         return self
 
     @model_validator(mode="after")
@@ -447,6 +465,7 @@ class ServerConfig(_Strict):
     description: str = ""
 
     server: ServerBindConfig = Field(default_factory=ServerBindConfig)
+    identity: ServerIdentityConfig = Field(default_factory=ServerIdentityConfig)
     persistence: PersistenceConfig = Field(default_factory=PersistenceConfig)
     observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
     card: CardConfig = Field(default_factory=CardConfig)
@@ -515,6 +534,7 @@ __all__ = [
     "RouterSubConfig",
     "ServerBindConfig",
     "ServerConfig",
+    "ServerIdentityConfig",
     "SimplePattern",
     "SkillConfig",
     "ToTPattern",

@@ -10,7 +10,7 @@ that teaches the model the ``mount_id`` convention.
 from __future__ import annotations
 
 from config_a2a.config.juicefs import JuiceFSConfig
-from config_a2a.config.models import McpStreamableHttpServer
+from config_a2a.config.models import McpStreamableHttpServer, ToolFilters
 
 
 def compile_juicefs(juicefs: JuiceFSConfig) -> McpStreamableHttpServer:
@@ -22,6 +22,33 @@ def compile_juicefs(juicefs: JuiceFSConfig) -> McpStreamableHttpServer:
         forward_identity=True,
         identity_header=juicefs.identity.forwarded_user_header,
         service_identity=juicefs.service_identity,
+    )
+
+
+def _dedup(*sources: list[str]) -> list[str]:
+    """Concatenate the given pattern lists, dropping duplicates, keeping order."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for source in sources:
+        for pattern in source:
+            if pattern not in seen:
+                seen.add(pattern)
+                out.append(pattern)
+    return out
+
+
+def merge_filters(base: ToolFilters, extra: ToolFilters) -> ToolFilters:
+    """Union ``extra`` (the ``juicefs.filters``) into ``base`` (``tools.filters``).
+
+    ``ToolFilters`` semantics: ``include`` is an OR allowlist (a tool passes when
+    it matches *any* include pattern, or when ``include`` is empty), ``exclude``
+    is an OR denylist. The coherent merge is therefore a deduplicated union of
+    both lists. The operation is idempotent: re-merging already-merged filters
+    yields the same result.
+    """
+    return ToolFilters(
+        include=_dedup(base.include, extra.include),
+        exclude=_dedup(base.exclude, extra.exclude),
     )
 
 
@@ -51,4 +78,4 @@ def juicefs_prompt_suffix(*, default_mount_id: str | None) -> str:
     return "\n".join(lines)
 
 
-__all__ = ["compile_juicefs", "juicefs_prompt_suffix"]
+__all__ = ["compile_juicefs", "juicefs_prompt_suffix", "merge_filters"]

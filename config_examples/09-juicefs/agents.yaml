@@ -6,6 +6,11 @@ server:
   host: 0.0.0.0
   port: 9009
 
+# Server-wide: which trusted request header carries the end-user identity that
+# the A2A boundary captures and re-forwards to mcp-juicefs (default below).
+identity:
+  inbound_header: X-Forwarded-User
+
 persistence:
   backend: sqlite
   url: sqlite+aiosqlite:///./state/juicefs-server.db

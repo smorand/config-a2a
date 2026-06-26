@@ -15,6 +15,9 @@ server:
   host: 0.0.0.0                  # default
   port: 9000                     # default
 
+identity:                        # how the A2A boundary identifies the end user
+  inbound_header: X-Forwarded-User   # default; read by IdentityCaptureMiddleware
+
 persistence:                     # shared by all agents unless overridden
   backend: sqlite                # sqlite | postgresql
   url: sqlite+aiosqlite:///./state/server.db
@@ -100,10 +103,10 @@ agents: []                       # one entry per mounted agent (may be empty)
   juicefs:                       # optional; sugar over an mcp-juicefs streamable-http server
     url: ${JUICEFS_MCP_URL}      # full field reference in .agent_docs/juicefs.md
     name: juicefs
-    identity: { mode: forwarded_user, forwarded_user_header: X-Forwarded-User }
+    identity: { mode: forwarded_user, forwarded_user_header: X-Forwarded-User }  # OUTBOUND header
     default_mount_id: perso-alice
     service_identity: svc-config-a2a
-    filters: { include: [], exclude: [] }
+    filters: { include: [], exclude: [] }   # merged (deduplicated union) into tools.filters
 
   guardrails:
     max_loops: 30

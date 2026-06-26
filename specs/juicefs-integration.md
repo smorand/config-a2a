@@ -33,10 +33,15 @@ See `mcp-juicefs/.agent_docs/integration.md`.
 
 config-a2a propagates the **end user** identity per request. It is captured at
 the A2A boundary by an ASGI middleware (`IdentityCaptureMiddleware`) reading a
-trusted header (default `X-Forwarded-User`), stored in a `ContextVar`
-(`config_a2a.identity`), and re-emitted on the outbound MCP call. A future
-switch to a re-signed JWT changes only the capture and emit steps, not the
-propagation seam.
+trusted header, stored in a `ContextVar` (`config_a2a.identity`), and re-emitted
+on the outbound MCP call. A future switch to a re-signed JWT changes only the
+capture and emit steps, not the propagation seam.
+
+The **inbound** header is a server-wide setting
+(`ServerConfig.identity.inbound_header`, default `X-Forwarded-User`), so there is
+no per-agent ambiguity. The **outbound** header forwarded to mcp-juicefs is
+configured independently per `juicefs:` block
+(`juicefs.identity.forwarded_user_header`).
 
 For tool **discovery** at load time there is no end user in context, so a
 configurable **service identity** is forwarded instead, letting `list_tools`
@@ -68,10 +73,11 @@ config-a2a runtime does not provision.
 |---|---|
 | Identity ContextVar + capture middleware | `src/config_a2a/identity.py` |
 | `juicefs:` model | `src/config_a2a/config/juicefs.py` (`JuiceFSConfig`) |
-| `juicefs:` field on agent + desugaring validator | `src/config_a2a/config/models.py` |
+| `juicefs:` field on agent + desugaring validator (incl. filter merge) | `src/config_a2a/config/models.py` |
+| Server-level inbound header (`ServerConfig.identity`) | `src/config_a2a/config/models.py` (`ServerIdentityConfig`) |
 | Forward-ref resolution (`model_rebuild`) | `src/config_a2a/config/__init__.py` |
-| Desugaring + prompt fragment | `src/config_a2a/juicefs/binding.py` |
-| Inbound capture wiring | `src/config_a2a/api.py` (`IdentityCaptureMiddleware`) |
+| Desugaring + prompt fragment + `merge_filters` | `src/config_a2a/juicefs/binding.py` |
+| Inbound capture wiring (reads `ServerConfig.identity.inbound_header`) | `src/config_a2a/api.py` (`IdentityCaptureMiddleware`) |
 | Outbound header injection | `src/config_a2a/mcp/streamable_http.py` |
 | `default_mount_id` / per-message `mount_id` -> prompt | `src/config_a2a/runtime.py`, `src/config_a2a/a2a/routes.py` |
 | Example | `config_examples/09-juicefs/` |
@@ -81,21 +87,28 @@ config-a2a runtime does not provision.
 
 1. Load: the `juicefs:` block is desugared (in the `AgentConfig` validator) into
    an `McpStreamableHttpServer` with `forward_identity=True`, appended to
-   `tools.mcp_servers`. Discovery forwards the service identity.
-2. Request: `IdentityCaptureMiddleware` binds `X-Forwarded-User` to the
-   ContextVar. The route extracts an optional per-message `mount_id` from message
-   metadata. `run_message` appends the JuiceFS convention plus the effective
-   `mount_id` (per-message override, else `default_mount_id`) to the system
-   prompt.
+   `tools.mcp_servers`; `juicefs.filters` is folded into `tools.filters` as a
+   deduplicated union. Discovery forwards the service identity.
+2. Request: `IdentityCaptureMiddleware` binds the value of
+   `ServerConfig.identity.inbound_header` to the ContextVar. The route extracts
+   an optional per-message `mount_id` from message metadata. `run_message`
+   appends the JuiceFS convention plus the effective `mount_id` (per-message
+   override, else `default_mount_id`) to the system prompt.
 3. Tool call: `streamable_http.call_tool` injects the bound end user into
    `X-Forwarded-User` on the outbound call to mcp-juicefs.
 
-## Open questions / future work
+## Out of scope (confirmed follow-ups)
 
-* JWT mode: capture a re-signed token and forward it instead of
+* JWT / SSO mode: capture a re-signed token and forward it instead of
   `X-Forwarded-User` (only the capture/emit steps change).
-* Per-server inbound header: today one inbound header name is resolved per
-  process (first juicefs agent wins); multi-tenant servers mixing header names
-  would need per-route capture.
-* Surfacing `fs.list_allowed_roots` results into the prompt automatically (today
-  the model calls it on demand).
+* A2A artifacts for file results.
+* Auto-surfacing `fs.list_allowed_roots` into the prompt: discovery stays **on
+  demand**; the model calls it when it needs the volume list.
+
+## Resolved
+
+* Inbound header is now an explicit server-wide setting
+  (`ServerConfig.identity.inbound_header`), replacing the earlier
+  "first juicefs agent wins" heuristic.
+* `juicefs.filters` is merged (deduplicated union) into `tools.filters` at
+  desugaring.

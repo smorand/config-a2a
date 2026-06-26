@@ -10,6 +10,9 @@ operational reference.
 ## YAML
 
 ```yaml
+identity:                              # ServerConfig level: inbound header (default below)
+  inbound_header: X-Forwarded-User
+
 agents:
   - slug: files
     name: juicefs-assistant
@@ -21,10 +24,10 @@ agents:
       name: juicefs                      # MCP server name; tools surface as juicefs.fs.*
       identity:
         mode: forwarded_user             # v1: trusted network, X-Forwarded-User
-        forwarded_user_header: X-Forwarded-User
+        forwarded_user_header: X-Forwarded-User   # OUTBOUND header to mcp-juicefs
       default_mount_id: ${JUICEFS_DEFAULT_MOUNT_ID}   # optional "current project"
       service_identity: ${JUICEFS_SERVICE_IDENTITY}   # identity used for tool discovery
-      filters: { include: [], exclude: [] }           # optional, applied like tools.filters
+      filters: { include: [], exclude: [] }           # optional, merged into tools.filters
 ```
 
 ### Fields
@@ -34,10 +37,16 @@ agents:
 | `url` | required | mcp-juicefs streamable-HTTP endpoint. |
 | `name` | `juicefs` | MCP server name; tools are `name.fs.*`. |
 | `identity.mode` | `forwarded_user` | v1 only mode (trusted network). |
-| `identity.forwarded_user_header` | `X-Forwarded-User` | Header used both to read the inbound A2A request and to re-emit the outbound MCP call. |
+| `identity.forwarded_user_header` | `X-Forwarded-User` | **Outbound** header sent to mcp-juicefs. The **inbound** header is the server-level `identity.inbound_header`. |
 | `default_mount_id` | `null` | Volume surfaced to the model as its current project. |
 | `service_identity` | `null` | Identity forwarded during tool discovery (no end user in context). |
-| `filters` | empty | Optional include/exclude tool filters. |
+| `filters` | empty | Optional include/exclude tool filters, merged (deduplicated union) into `tools.filters`. |
+
+Server-level (`ServerConfig`):
+
+| Field | Default | Meaning |
+|---|---|---|
+| `identity.inbound_header` | `X-Forwarded-User` | Trusted request header the A2A boundary reads to identify the end user. |
 
 ## What desugaring produces
 
@@ -55,19 +64,49 @@ At load time the `juicefs:` block compiles into an entry appended to
 
 The desugaring runs in the `AgentConfig` validator, so it also applies to agents
 loaded through the admin `POST /admin/agents` surface. It is idempotent (skips
-when a server with the same name already exists).
+when a server with the same name already exists, and the filter union never
+grows on revalidation).
 
-## Identity propagation
+It also folds `juicefs.filters` into the agent-wide `tools.filters` (see
+"Tool filters" below).
 
-1. `IdentityCaptureMiddleware` (installed in `create_app`) reads the inbound
-   header and binds it to a `ContextVar` (`config_a2a.identity.current_user`).
-2. `streamable_http.call_tool` injects that user into `identity_header` on the
-   outbound call. With no user bound (discovery), the `service_identity` is used
-   instead.
+## Identity: inbound (server) vs outbound (per juicefs block)
 
-The middleware reads the header name resolved from the first juicefs agent in
-the process (default `X-Forwarded-User`). The caller is responsible for having
-authenticated the user upstream; use only on a trusted/private network in v1.
+The **inbound** header (what the A2A boundary reads to identify the end user) is
+a **server-wide** setting; the **outbound** header (what is forwarded to
+mcp-juicefs) is configured per `juicefs:` block. They are independent.
+
+```yaml
+identity:                     # ServerConfig level
+  inbound_header: X-Forwarded-User   # default
+agents:
+  - slug: files
+    juicefs:
+      identity:
+        forwarded_user_header: X-Forwarded-User   # outbound header to mcp-juicefs
+```
+
+Propagation:
+
+1. `IdentityCaptureMiddleware` (installed in `create_app`) reads
+   `ServerConfig.identity.inbound_header` and binds the value to a `ContextVar`
+   (`config_a2a.identity.current_user`). One server-wide header, no per-agent
+   ambiguity.
+2. `streamable_http.call_tool` injects that user into the juicefs server's
+   `identity_header` on the outbound call. With no user bound (discovery), the
+   `service_identity` is used instead.
+
+The caller is responsible for having authenticated the user upstream; use only
+on a trusted/private network in v1.
+
+## Tool filters
+
+`juicefs.filters` is merged into the agent's `tools.filters` at desugaring as a
+deduplicated **union** (`include` and `exclude` lists concatenated, duplicates
+dropped, order preserved). `ToolFilters` semantics are unchanged: `include` is
+an OR allowlist (empty means "allow all"), `exclude` is an OR denylist. The
+merge is idempotent, so revalidating a config never grows the lists. Use either
+`tools.filters`, `juicefs.filters`, or both; the result is the same union.
 
 ## Choosing the `mount_id`
 

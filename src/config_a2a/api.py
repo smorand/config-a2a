@@ -30,7 +30,7 @@ from config_a2a.config.models import (
     AuthenticationConfig,
     ServerConfig,
 )
-from config_a2a.identity import DEFAULT_FORWARDED_USER_HEADER, IdentityCaptureMiddleware
+from config_a2a.identity import IdentityCaptureMiddleware
 from config_a2a.observability.otel import setup_otel
 from config_a2a.persistence import run_migrations
 from config_a2a.server import Server
@@ -84,18 +84,6 @@ def _agent_auth_dependency() -> _AuthCheck:
         del slug  # quiet linters about unused path param
 
     return _check
-
-
-def _resolve_inbound_user_header(agents: list[AgentConfig]) -> str:
-    """Pick the inbound ``X-Forwarded-User`` header name from juicefs agents.
-
-    All juicefs agents normally share the same header; the first one wins and
-    falls back to the default when no agent declares a ``juicefs:`` block.
-    """
-    for agent in agents:
-        if agent.juicefs is not None:
-            return agent.juicefs.identity.forwarded_user_header
-    return DEFAULT_FORWARDED_USER_HEADER
 
 
 def _build_admin_router(admin: AdminConfig) -> APIRouter:
@@ -293,7 +281,7 @@ def create_app(server_config: ServerConfig) -> FastAPI:
     # identity-forwarding MCP server) can act on the right person per request.
     app.add_middleware(
         IdentityCaptureMiddleware,
-        header_name=_resolve_inbound_user_header(server_config.agents),
+        header_name=server_config.identity.inbound_header,
     )
 
     server = Server(server_config, app)
@@ -361,7 +349,7 @@ def create_app_for_runtime(
     app.state.config_a2a_version = __version__
     app.add_middleware(
         IdentityCaptureMiddleware,
-        header_name=_resolve_inbound_user_header([cfg]),
+        header_name=server_config.identity.inbound_header,
     )
     server = Server(server_config, app)
     app.state.server = server
