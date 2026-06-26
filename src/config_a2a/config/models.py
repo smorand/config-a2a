@@ -8,9 +8,12 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import TYPE_CHECKING, Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+if TYPE_CHECKING:  # pragma: no cover — forward ref resolved via model_rebuild
+    from config_a2a.config.juicefs import JuiceFSConfig
 
 _SLUG_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 _NON_ALNUM = re.compile(r"[^a-z0-9]+")
@@ -80,6 +83,15 @@ class McpStreamableHttpServer(_Strict):
     transport: Literal["streamable-http"] = "streamable-http"
     url: str
     headers: dict[str, str] = Field(default_factory=dict)
+    # Per-request end-user identity forwarding (set by the juicefs desugaring).
+    # When ``forward_identity`` is true, the current end user (see
+    # ``config_a2a.identity``) is injected into ``identity_header`` on every
+    # outbound call; during tool discovery (no user in context) the optional
+    # ``service_identity`` is used instead so ``list_tools`` passes the
+    # downstream auth middleware.
+    forward_identity: bool = False
+    identity_header: str = "X-Forwarded-User"
+    service_identity: str | None = None
 
 
 class McpSseServer(_Strict):
@@ -384,6 +396,26 @@ class AgentConfig(_Strict):
     skills: list[SkillConfig] = Field(default_factory=list)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
     card: CardConfig | None = None
+    juicefs: "JuiceFSConfig | None" = None
+
+    @model_validator(mode="after")
+    def _desugar_juicefs(self) -> "AgentConfig":
+        """Compile a ``juicefs:`` block into an identity-forwarding MCP server.
+
+        Runs on every validation (server load and admin ``/agents`` load) and is
+        idempotent: it skips when a server with the same name is already present.
+        """
+        if self.juicefs is None:
+            return self
+        # Lazy import breaks the import cycle (binding imports this module for
+        # ``McpStreamableHttpServer``). The forward ref is resolved by
+        # ``config_a2a.config`` at package import time.
+        from config_a2a.juicefs.binding import compile_juicefs  # pylint: disable=import-outside-toplevel
+
+        compiled = compile_juicefs(self.juicefs)
+        if not any(server.name == compiled.name for server in self.tools.mcp_servers):
+            self.tools.mcp_servers.append(compiled)
+        return self
 
     @model_validator(mode="after")
     def _slug_default_and_shape(self) -> "AgentConfig":
@@ -459,6 +491,7 @@ __all__ = [
     "HandoffPattern",
     "HandoffTarget",
     "JudgeSubConfig",
+    "JuiceFSConfig",
     "LongTermMemoryConfig",
     "McpServer",
     "McpSseServer",
@@ -490,3 +523,7 @@ __all__ = [
     "WorkingMemoryConfig",
     "slugify",
 ]
+
+# NOTE: the ``AgentConfig.juicefs`` forward reference is resolved by
+# ``config_a2a.config.__init__`` (which imports ``JuiceFSConfig`` and calls
+# ``model_rebuild``) to keep this module free of an import-time cycle.
