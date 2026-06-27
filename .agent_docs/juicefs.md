@@ -48,6 +48,17 @@ Server-level (`ServerConfig`):
 |---|---|---|
 | `identity.inbound_header` | `X-Forwarded-User` | Trusted request header the A2A boundary reads to identify the end user. |
 
+## Tool names: dots are sanitized for the LLM
+
+mcp-juicefs names its tools with dots (`fs.read`), so config-a2a registers them
+as `juicefs.fs.read`. LLM providers reject dotted function names
+(`^[a-zA-Z0-9_-]+$`), so the dotted name is sanitized to `juicefs_fs_read` only
+when talking to the provider, and remapped back on the response. This is a
+**generic provider-boundary behavior** (not juicefs-specific); see the
+"Tool-name sanitization" section in `.agent_docs/mcp.md`. Internally (registry
+dispatch, `confirmations.per_tool: { "juicefs.fs.delete": prompt }`) the dotted
+names stay as-is, so your YAML keys remain dotted.
+
 ## What desugaring produces
 
 At load time the `juicefs:` block compiles into an entry appended to
