@@ -14,7 +14,7 @@ from config_a2a.api import create_app_for_runtime
 from config_a2a.config.models import AgentConfig, McpStdioServer, ToolFilters
 from config_a2a.providers.base import ChatRequest, ChatResponse, LlmProvider, TokenUsage, ToolCall
 from config_a2a.runtime import AgentRuntime
-from tests.unit.conftest import load_single_agent
+from tests.unit.conftest import assert_valid_tool_sequence, load_single_agent
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "fake_mcp_server.py"
 
@@ -129,6 +129,14 @@ async def test_destructive_tool_triggers_input_required_and_resumes() -> None:
         body = "".join(response.iter_text())
     second = _final_status(body)
     assert second["statusUpdate"]["status"]["state"] == "TASK_STATE_COMPLETED"
+    # The continuation history is a valid tool exchange: the re-executed tool
+    # result is preceded by an assistant tool_calls turn declaring its id.
+    provider = runtime.provider
+    assert isinstance(provider, _ScriptedProvider)
+    assert_valid_tool_sequence(provider.calls[-1])
+    resume_msgs = provider.calls[-1].messages
+    asst_with_calls = [m for m in resume_msgs if m.role == "assistant" and m.tool_calls]
+    assert asst_with_calls and asst_with_calls[-1].tool_calls[0].name == "fake.delete_file"
 
 
 @pytest.mark.parametrize(

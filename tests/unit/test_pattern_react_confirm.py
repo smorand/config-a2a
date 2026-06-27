@@ -20,7 +20,7 @@ from config_a2a.api import create_app_for_runtime
 from config_a2a.config.models import AgentConfig, ConfirmationsConfig, McpStdioServer
 from config_a2a.providers.base import ChatRequest, ChatResponse, LlmProvider, TokenUsage, ToolCall
 from config_a2a.runtime import AgentRuntime
-from tests.unit.conftest import load_single_agent
+from tests.unit.conftest import assert_valid_tool_sequence, load_single_agent
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "fake_mcp_server.py"
 
@@ -143,6 +143,12 @@ async def test_react_prompt_then_approve_executes_pending_call() -> None:
     # The pending destructive call was actually re-executed on resume.
     resume_turn = provider.calls[-1]
     assert any(m.role == "tool" and "deleted: /tmp/x" in m.content for m in resume_turn.messages)
+    # The continuation history is a valid exchange: the tool result is preceded
+    # by an assistant tool_calls turn declaring its id (regression: would 400 on
+    # real providers without it).
+    assert_valid_tool_sequence(resume_turn)
+    asst_with_calls = [m for m in resume_turn.messages if m.role == "assistant" and m.tool_calls]
+    assert asst_with_calls and asst_with_calls[-1].tool_calls[0].name == "fake.delete_file"
 
 
 async def test_react_prompt_then_deny_cancels() -> None:
