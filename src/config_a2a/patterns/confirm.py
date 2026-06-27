@@ -102,10 +102,15 @@ async def resume_pending(ctx: ExecutionContext, messages: list[ChatMessage]) -> 
         return "cancelled"
     tool_call_id = pending.get("tool_call_id", "resume")
     tool_name = pending["tool_name"]
-    tool_result = await dispatch_tool(
-        ctx,
-        ToolCall(id=tool_call_id, name=tool_name, arguments=pending.get("arguments", {})),
-    )
+    tool_call = ToolCall(id=tool_call_id, name=tool_name, arguments=pending.get("arguments", {}))
+    tool_result = await dispatch_tool(ctx, tool_call)
+    # Replay the assistant tool_calls turn *before* the tool result so the
+    # continuation history is a valid exchange: assistant(tool_calls) ->
+    # tool(result) -> assistant(final). OpenAI (and Anthropic/Gemini) reject a
+    # tool message that does not follow a matching tool_calls turn. The name is
+    # stored qualified; the provider adapter sanitizes it on the wire like any
+    # other history entry.
+    messages.append(ChatMessage(role="assistant", content="", tool_calls=[tool_call]))
     messages.append(ChatMessage(role="tool", content=tool_result, name=tool_name, tool_call_id=tool_call_id))
     await ctx.task_store.update_status(ctx.task_id, TaskStatus(state="TASK_STATE_WORKING"), clear_pending=True)
     return "resumed"
