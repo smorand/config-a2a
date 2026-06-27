@@ -14,6 +14,7 @@ from config_a2a.patterns.base import (
     emit_status,
     emit_thinking,
 )
+from config_a2a.patterns.confirm import decide_tool, resume_pending
 from config_a2a.providers.base import ChatMessage
 
 log = logging.getLogger(__name__)
@@ -37,6 +38,13 @@ async def run_react(ctx: ExecutionContext) -> None:
 
     messages: list[ChatMessage] = [ChatMessage(role="system", content=composed_system)]
     messages.append(ChatMessage(role="user", content=ctx.user_text))
+
+    # Resume from a pending destructive-tool confirmation, if any. On approval
+    # the persisted call is re-executed and appended to ``messages`` so the loop
+    # below continues with the tool result in context; on anything else the task
+    # is cancelled.
+    if await resume_pending(ctx, messages) == "cancelled":
+        return
 
     await emit_status(ctx, "TASK_STATE_WORKING")
 
@@ -73,22 +81,13 @@ async def run_react(ctx: ExecutionContext) -> None:
         messages.append(ChatMessage(role="assistant", content=response.content or "", tool_calls=response.tool_calls))
         seen_assistant.append(response.content or "")
         for tool_call in response.tool_calls:
-            handle = ctx.mcp.handles.get(tool_call.name) if ctx.mcp else None
-            destructive = bool(handle and handle.descriptor.annotations.get("destructiveHint"))
-            if destructive:
-                from config_a2a.patterns.simple import _suspend_for_confirmation  # local import
-
-                await _suspend_for_confirmation(ctx, tool_call)
-                return
-            tool_text = (
-                "(no tools wired)"
-                if not handle
-                else ((await ctx.mcp.call(tool_call.name, tool_call.arguments)).get("text") or "")
-            )
+            decision = await decide_tool(ctx, tool_call)
+            if decision.suspended:
+                return  # Resume happens when the user re-sends with the same taskId.
             messages.append(
                 ChatMessage(
                     role="tool",
-                    content=tool_text,
+                    content=decision.text or "",
                     name=tool_call.name,
                     tool_call_id=tool_call.id,
                 )
