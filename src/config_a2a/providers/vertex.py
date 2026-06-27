@@ -19,6 +19,7 @@ from config_a2a.providers.base import (
     ChatResponse,
     LlmProvider,
     ProviderError,
+    ToolNameCodec,
 )
 from config_a2a.providers.google import GoogleGeminiProvider
 
@@ -71,7 +72,8 @@ class VertexGeminiProvider(LlmProvider):
 
     async def chat(self, request: ChatRequest) -> ChatResponse:
         # Reuse Google's payload shaping; just change endpoint + auth.
-        system, contents = GoogleGeminiProvider._to_contents(request.messages)
+        codec = ToolNameCodec(request.tools)
+        system, contents = GoogleGeminiProvider._to_contents(request.messages, codec)
         payload: dict[str, Any] = {"contents": contents}
         if system:
             payload["systemInstruction"] = {"role": "system", "parts": [{"text": system}]}
@@ -87,7 +89,7 @@ class VertexGeminiProvider(LlmProvider):
                 {
                     "functionDeclarations": [
                         {
-                            "name": tool.name,
+                            "name": codec.to_wire(tool.name),
                             "description": tool.description,
                             "parameters": tool.parameters,
                         }
@@ -125,9 +127,8 @@ class VertexGeminiProvider(LlmProvider):
                     text_chunks.append(part["text"])
                 elif "functionCall" in part:
                     call = part["functionCall"]
-                    tool_calls.append(
-                        ToolCall(id=call.get("name", ""), name=call.get("name", ""), arguments=call.get("args") or {})
-                    )
+                    qualified = codec.from_wire(call.get("name", ""))
+                    tool_calls.append(ToolCall(id=qualified, name=qualified, arguments=call.get("args") or {}))
         usage = data.get("usageMetadata") or {}
         return ChatResponse(
             content="".join(text_chunks),

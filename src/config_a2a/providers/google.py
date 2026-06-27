@@ -15,6 +15,7 @@ from config_a2a.providers.base import (
     ProviderError,
     TokenUsage,
     ToolCall,
+    ToolNameCodec,
 )
 
 
@@ -40,7 +41,7 @@ class GoogleGeminiProvider(LlmProvider):
         await self._client.aclose()
 
     @staticmethod
-    def _to_contents(messages: list[ChatMessage]) -> tuple[str, list[dict[str, Any]]]:
+    def _to_contents(messages: list[ChatMessage], codec: ToolNameCodec) -> tuple[str, list[dict[str, Any]]]:
         system_chunks: list[str] = []
         contents: list[dict[str, Any]] = []
         for msg in messages:
@@ -53,12 +54,12 @@ class GoogleGeminiProvider(LlmProvider):
                 if msg.content:
                     parts.append({"text": msg.content})
                 for tc in msg.tool_calls:
-                    parts.append({"functionCall": {"name": tc.name, "args": tc.arguments}})
+                    parts.append({"functionCall": {"name": codec.to_wire(tc.name), "args": tc.arguments}})
             elif msg.role == "tool":
                 parts.append(
                     {
                         "functionResponse": {
-                            "name": msg.name or "",
+                            "name": codec.to_wire(msg.name or ""),
                             "response": {"content": msg.content},
                         }
                     }
@@ -69,7 +70,8 @@ class GoogleGeminiProvider(LlmProvider):
         return "\n\n".join(system_chunks), contents
 
     async def chat(self, request: ChatRequest) -> ChatResponse:
-        system, contents = self._to_contents(request.messages)
+        codec = ToolNameCodec(request.tools)
+        system, contents = self._to_contents(request.messages, codec)
         model = request.model or self._model
         payload: dict[str, Any] = {"contents": contents}
         if system:
@@ -86,7 +88,7 @@ class GoogleGeminiProvider(LlmProvider):
                 {
                     "functionDeclarations": [
                         {
-                            "name": tool.name,
+                            "name": codec.to_wire(tool.name),
                             "description": tool.description,
                             "parameters": tool.parameters,
                         }
@@ -114,9 +116,8 @@ class GoogleGeminiProvider(LlmProvider):
                     text_chunks.append(part["text"])
                 elif "functionCall" in part:
                     call = part["functionCall"]
-                    tool_calls.append(
-                        ToolCall(id=call.get("name", ""), name=call.get("name", ""), arguments=call.get("args") or {})
-                    )
+                    qualified = codec.from_wire(call.get("name", ""))
+                    tool_calls.append(ToolCall(id=qualified, name=qualified, arguments=call.get("args") or {}))
         usage = data.get("usageMetadata") or {}
         return ChatResponse(
             content="".join(text_chunks),

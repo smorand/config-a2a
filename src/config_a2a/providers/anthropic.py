@@ -15,6 +15,7 @@ from config_a2a.providers.base import (
     ProviderError,
     TokenUsage,
     ToolCall,
+    ToolNameCodec,
 )
 
 
@@ -49,7 +50,7 @@ class AnthropicProvider(LlmProvider):
         }
 
     @staticmethod
-    def _split_messages(messages: list[ChatMessage]) -> tuple[str, list[dict[str, Any]]]:
+    def _split_messages(messages: list[ChatMessage], codec: ToolNameCodec) -> tuple[str, list[dict[str, Any]]]:
         system_chunks: list[str] = []
         out: list[dict[str, Any]] = []
         for msg in messages:
@@ -80,7 +81,7 @@ class AnthropicProvider(LlmProvider):
                                 {
                                     "type": "tool_use",
                                     "id": tc.id,
-                                    "name": tc.name,
+                                    "name": codec.to_wire(tc.name),
                                     "input": tc.arguments,
                                 }
                                 for tc in msg.tool_calls
@@ -93,7 +94,8 @@ class AnthropicProvider(LlmProvider):
         return "\n\n".join(system_chunks), out
 
     async def chat(self, request: ChatRequest) -> ChatResponse:
-        system, messages = self._split_messages(request.messages)
+        codec = ToolNameCodec(request.tools)
+        system, messages = self._split_messages(request.messages, codec)
         payload: dict[str, Any] = {
             "model": request.model or self._model,
             "messages": messages,
@@ -106,7 +108,7 @@ class AnthropicProvider(LlmProvider):
         if request.tools:
             payload["tools"] = [
                 {
-                    "name": tool.name,
+                    "name": codec.to_wire(tool.name),
                     "description": tool.description,
                     "input_schema": tool.parameters,
                 }
@@ -134,7 +136,11 @@ class AnthropicProvider(LlmProvider):
                 text_chunks.append(part.get("text") or "")
             elif kind == "tool_use":
                 tool_calls.append(
-                    ToolCall(id=part.get("id") or "", name=part.get("name") or "", arguments=part.get("input") or {})
+                    ToolCall(
+                        id=part.get("id") or "",
+                        name=codec.from_wire(part.get("name") or ""),
+                        arguments=part.get("input") or {},
+                    )
                 )
         usage = data.get("usage") or {}
         return ChatResponse(
