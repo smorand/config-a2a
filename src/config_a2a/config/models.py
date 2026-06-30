@@ -39,13 +39,16 @@ class ServerBindConfig(_Strict):
     port: int = Field(default=9000, ge=1, le=65535)
 
 
-class ServerJwtConfig(_Strict):
-    """Signed-JWT verification parameters for end-user identity (``mode: jwt``).
+class ServerIdentityConfig(_Strict):
+    """Server-wide end-user identity: signed-JWT verification (the only mode).
 
-    The signature is verified with ``public_key_path`` (RS256 by default), the
-    issuer is pinned to ``web-a2a`` and the identity is read from the ``email``
-    claim. ``service_token_path`` points at a pre-minted service JWT presented
-    during tool discovery (no end user in context).
+    The inbound Bearer JWT on ``header`` is signature-verified with
+    ``public_key_path`` (RS256 by default), the issuer is pinned to ``web-a2a``
+    and the identity is read from the ``email`` claim. A missing or invalid token
+    yields ``401`` at the A2A boundary. ``service_token_path`` points at a
+    pre-minted service JWT presented during tool discovery (no end user in
+    context). ``public_key_path`` is required: configuring ``identity:`` at all
+    means turning on JWT verification.
     """
 
     public_key_path: str
@@ -55,27 +58,6 @@ class ServerJwtConfig(_Strict):
     audience: str | None = None
     claim: str = "email"
     service_token_path: str | None = None
-
-
-class ServerIdentityConfig(_Strict):
-    """How the end-user identity is captured at the A2A boundary (server-wide).
-
-    The mode is process-wide (one mode per server) and strict: there is no
-    per-request fallback. In ``forwarded_user`` mode ``inbound_header`` names the
-    trusted request header read by ``IdentityCaptureMiddleware``. In ``jwt`` mode
-    the middleware verifies a Bearer JWT from ``jwt.header`` and ignores
-    ``X-Forwarded-User``; a missing or invalid token yields ``401``.
-    """
-
-    inbound_header: str = "X-Forwarded-User"
-    mode: Literal["forwarded_user", "jwt"] = "forwarded_user"
-    jwt: ServerJwtConfig | None = None
-
-    @model_validator(mode="after")
-    def _require_jwt_block(self) -> "ServerIdentityConfig":
-        if self.mode == "jwt" and self.jwt is None:
-            raise ValueError("identity.mode is 'jwt' but identity.jwt is not configured")
-        return self
 
 
 class PersistenceConfig(_Strict):
@@ -123,20 +105,13 @@ class McpStreamableHttpServer(_Strict):
     url: str
     headers: dict[str, str] = Field(default_factory=dict)
     # Per-request end-user identity forwarding (set by the juicefs desugaring).
-    # When ``forward_identity`` is true, the current end user (see
-    # ``config_a2a.identity``) is injected into ``identity_header`` on every
-    # outbound call; during tool discovery (no user in context) a service
-    # credential is used instead so ``list_tools`` passes the downstream auth
-    # middleware. ``identity_mode`` selects what flows downstream:
-    #   * ``forwarded_user``: the bare email goes in ``identity_header``; the
-    #     discovery fallback is the static ``service_identity`` email.
-    #   * ``jwt``: a ``Bearer <jwt>`` string goes in ``identity_header``; on a
-    #     call it is the pass-through credential bound for the request, on
-    #     discovery it is the static ``service_credential``.
+    # When ``forward_identity`` is true the verified ``Bearer <jwt>`` of the
+    # current end user (see ``config_a2a.identity``) is injected into
+    # ``identity_header`` on every outbound call; during tool discovery (no user
+    # in context) the static ``service_credential`` (``Bearer <service token>``)
+    # is used instead so ``list_tools`` passes the downstream auth middleware.
     forward_identity: bool = False
-    identity_mode: Literal["forwarded_user", "jwt"] = "forwarded_user"
-    identity_header: str = "X-Forwarded-User"
-    service_identity: str | None = None
+    identity_header: str = "X-Forwarded-Authorization"
     service_credential: str | None = None
 
 
@@ -499,7 +474,7 @@ class ServerConfig(_Strict):
     description: str = ""
 
     server: ServerBindConfig = Field(default_factory=ServerBindConfig)
-    identity: ServerIdentityConfig = Field(default_factory=ServerIdentityConfig)
+    identity: ServerIdentityConfig | None = None
     persistence: PersistenceConfig = Field(default_factory=PersistenceConfig)
     observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
     card: CardConfig = Field(default_factory=CardConfig)
@@ -529,12 +504,12 @@ class ServerConfig(_Strict):
     def _compile_juicefs_with_identity(self) -> "ServerConfig":
         """Recompile each agent's ``juicefs:`` block with the server-wide identity.
 
-        ``AgentConfig._desugar_juicefs`` already produced a ``forwarded_user``
-        baseline (it cannot see ``ServerConfig.identity``). This server-level pass
-        replaces that compiled server with one that honours ``self.identity``, so
-        a server in ``jwt`` mode forwards a Bearer credential downstream. In
-        ``forwarded_user`` mode the recompiled server is identical, so behaviour
-        is unchanged. The operation is idempotent (replace, never duplicate).
+        ``AgentConfig._desugar_juicefs`` already produced a baseline (it cannot
+        see ``ServerConfig.identity``, so it uses the default JWT header and no
+        service credential). This server-level pass replaces that compiled server
+        with one that honours ``self.identity``: the configured JWT header is
+        used and the static service token is read for tool discovery. The
+        operation is idempotent (replace, never duplicate).
         """
         from config_a2a.juicefs.binding import (  # pylint: disable=import-outside-toplevel
             compile_juicefs,
@@ -599,7 +574,6 @@ __all__ = [
     "ServerBindConfig",
     "ServerConfig",
     "ServerIdentityConfig",
-    "ServerJwtConfig",
     "SimplePattern",
     "SkillConfig",
     "ToTPattern",

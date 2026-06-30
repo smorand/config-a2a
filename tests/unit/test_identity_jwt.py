@@ -1,4 +1,4 @@
-"""Server-wide ``jwt`` identity mode: inbound verification and outbound relay.
+"""Server-wide JWT identity (the only mechanism): inbound verification and relay.
 
 Mirrors ``tests/unit/test_juicefs.py`` patterns. Tokens are minted with the
 web-a2a private key and verified with the config-a2a public key (the validated
@@ -19,7 +19,7 @@ from starlette.routing import Route
 from starlette.testclient import TestClient
 
 from config_a2a.config.juicefs import JuiceFSConfig
-from config_a2a.config.models import McpStreamableHttpServer, ServerConfig, ServerIdentityConfig, ServerJwtConfig
+from config_a2a.config.models import McpStreamableHttpServer, ServerConfig, ServerIdentityConfig
 from config_a2a.identity import (
     IdentityCaptureMiddleware,
     bind_credential,
@@ -48,9 +48,9 @@ def _mint(**claims: Any) -> str:
 
 
 def _jwt_identity(**overrides: Any) -> ServerIdentityConfig:
-    jwt_kwargs: dict[str, Any] = {"public_key_path": str(PUBLIC_KEY)}
-    jwt_kwargs.update(overrides)
-    return ServerIdentityConfig(mode="jwt", jwt=ServerJwtConfig(**jwt_kwargs))
+    kwargs: dict[str, Any] = {"public_key_path": str(PUBLIC_KEY)}
+    kwargs.update(overrides)
+    return ServerIdentityConfig(**kwargs)
 
 
 def _probe_app(identity: ServerIdentityConfig) -> Starlette:
@@ -65,13 +65,13 @@ def _probe_app(identity: ServerIdentityConfig) -> Starlette:
 # --- model validation -------------------------------------------------------
 
 
-def test_jwt_mode_requires_jwt_block() -> None:
-    with pytest.raises(ValueError, match="identity.jwt is not configured"):
-        ServerIdentityConfig(mode="jwt")
+def test_identity_requires_public_key() -> None:
+    with pytest.raises(ValueError, match="public_key_path"):
+        ServerIdentityConfig()
 
 
 def test_jwt_config_defaults_match_wire_contract() -> None:
-    cfg = ServerJwtConfig(public_key_path=str(PUBLIC_KEY))
+    cfg = ServerIdentityConfig(public_key_path=str(PUBLIC_KEY))
     assert cfg.header == "X-Forwarded-Authorization"
     assert cfg.algorithms == ["RS256"]
     assert cfg.issuer == "web-a2a"
@@ -135,7 +135,6 @@ def _jwt_server() -> McpStreamableHttpServer:
 def test_compile_juicefs_jwt_mode() -> None:
     server = _jwt_server()
     assert server.forward_identity is True
-    assert server.identity_mode == "jwt"
     assert server.identity_header == "X-Forwarded-Authorization"
     if SERVICE_JWT.exists():
         assert server.service_credential is not None
@@ -172,10 +171,7 @@ def test_server_config_compiles_juicefs_in_jwt_mode() -> None:
     server = ServerConfig.model_validate(
         {
             "name": "s",
-            "identity": {
-                "mode": "jwt",
-                "jwt": {"public_key_path": str(PUBLIC_KEY), "service_token_path": str(SERVICE_JWT)},
-            },
+            "identity": {"public_key_path": str(PUBLIC_KEY), "service_token_path": str(SERVICE_JWT)},
             "agents": [
                 {
                     "name": "fsbot",
@@ -189,7 +185,7 @@ def test_server_config_compiles_juicefs_in_jwt_mode() -> None:
     juicefs_servers = [s for s in server.agents[0].tools.mcp_servers if s.name == "juicefs"]
     assert len(juicefs_servers) == 1
     compiled = juicefs_servers[0]
-    assert compiled.identity_mode == "jwt"
+    assert compiled.forward_identity is True
     assert compiled.identity_header == "X-Forwarded-Authorization"
 
 

@@ -2,6 +2,13 @@
 
 Status: implemented on branch `feat/juicefs-native`.
 
+> Update (`feat/jwt-only`): the `forwarded_user` / `X-Forwarded-User` identity
+> mode described below was a v1 design step and has been removed. End-user
+> identity is now JWT-only and server-wide (RS256, claim `email`, `iss` `web-a2a`,
+> inbound on `X-Forwarded-Authorization`); the verified Bearer is re-forwarded to
+> mcp-juicefs and a service token is used for tool discovery. See
+> `.agent_docs/juicefs.md` for the current contract.
+
 ## Goal
 
 Give a config-a2a agent first-class file tools backed by a JuiceFS volume,

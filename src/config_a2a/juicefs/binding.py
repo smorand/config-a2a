@@ -20,38 +20,31 @@ def compile_juicefs(
     *,
     server_identity: ServerIdentityConfig | None = None,
 ) -> McpStreamableHttpServer:
-    """Translate a ``juicefs:`` block into an identity-forwarding MCP server.
+    """Translate a ``juicefs:`` block into a JWT identity-forwarding MCP server.
 
-    ``server_identity`` carries the server-wide mode. When it is ``None`` or in
-    ``forwarded_user`` mode the bare end-user email is re-forwarded on the
-    ``forwarded_user_header`` (discovery falls back to ``service_identity``). In
-    ``jwt`` mode the verified ``Bearer <jwt>`` credential is forwarded on the
-    JWT header instead, and discovery uses the static service token.
+    Identity is server-wide and JWT-only. On a tool call the verified
+    ``Bearer <jwt>`` of the end user is re-forwarded on ``identity_header``; on
+    discovery (no end user) the static service credential (``Bearer <service
+    token>``) is used instead. ``server_identity`` supplies the JWT ``header``
+    and the ``service_token_path``. When it is omitted (standalone agent
+    validation, before the server-level pass folds in ``ServerConfig.identity``)
+    the header defaults to ``X-Forwarded-Authorization`` and no service
+    credential is set.
     """
-    if server_identity is not None and server_identity.mode == "jwt":
-        jwt_config = server_identity.jwt
-        assert jwt_config is not None  # guaranteed by ServerIdentityConfig validator
-        service_credential: str | None = None
-        if jwt_config.service_token_path:
-            token = Path(jwt_config.service_token_path).read_text(encoding="utf-8").strip()
+    header = "X-Forwarded-Authorization"
+    service_credential: str | None = None
+    if server_identity is not None:
+        header = server_identity.header
+        if server_identity.service_token_path:
+            token = Path(server_identity.service_token_path).read_text(encoding="utf-8").strip()
             service_credential = f"Bearer {token}"
-        return McpStreamableHttpServer(
-            name=juicefs.name,
-            url=juicefs.url,
-            headers={},
-            forward_identity=True,
-            identity_mode="jwt",
-            identity_header=jwt_config.header,
-            service_credential=service_credential,
-        )
     return McpStreamableHttpServer(
         name=juicefs.name,
         url=juicefs.url,
         headers={},
         forward_identity=True,
-        identity_mode="forwarded_user",
-        identity_header=juicefs.identity.forwarded_user_header,
-        service_identity=juicefs.service_identity,
+        identity_header=header,
+        service_credential=service_credential,
     )
 
 

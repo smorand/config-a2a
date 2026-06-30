@@ -6,22 +6,19 @@ server:
   host: 0.0.0.0
   port: 9019
 
-# Server-wide identity in JWT mode (one mode per process, strict, no fallback).
-# The A2A boundary verifies a Bearer JWT on `X-Forwarded-Authorization`, binds the
-# `email` claim as the end user, and re-forwards that same Bearer credential to
-# mcp-juicefs. An inbound `X-Forwarded-User` is ignored; a missing or invalid
-# token yields 401. `public_key_path` and `service_token_path` resolve relative
-# to this YAML file (here: the repo's .keys/ directory).
+# Server-wide end-user identity. JWT is the only mechanism: the A2A boundary
+# verifies a Bearer JWT on `X-Forwarded-Authorization`, binds the `email` claim
+# as the end user, and re-forwards that same Bearer credential to mcp-juicefs. A
+# missing or invalid token yields 401. `public_key_path` and `service_token_path`
+# resolve relative to this YAML file (here: the repo's .keys/ directory).
 identity:
-  mode: jwt
-  jwt:
-    public_key_path: ../../.keys/jwt.pub      # RS256 verifier public key
-    header: X-Forwarded-Authorization         # inbound Bearer JWT header
-    algorithms: [RS256]
-    issuer: web-a2a                            # pinned issuer
-    audience: null                             # no audience check
-    claim: email                               # identity claim
-    service_token_path: ../../.keys/service.jwt  # Bearer used for tool discovery
+  public_key_path: ../../.keys/jwt.pub        # RS256 verifier public key
+  header: X-Forwarded-Authorization           # inbound Bearer JWT header
+  algorithms: [RS256]
+  issuer: web-a2a                              # pinned issuer
+  audience: null                               # no audience check
+  claim: email                                 # identity claim
+  service_token_path: ../../.keys/service.jwt  # Bearer used for tool discovery
 
 persistence:
   backend: sqlite
@@ -55,9 +52,9 @@ agents:
       max_iterations: 8
     prompts:
       system_file: prompts/system.md
-    # Native JuiceFS block. In JWT mode the outbound identity header and the
-    # discovery credential come from the server-wide `identity.jwt` block above,
-    # so the `juicefs.identity` / `service_identity` keys are not needed here.
+    # Native JuiceFS block. The outbound identity header and the discovery
+    # credential come from the server-wide `identity:` block above, so the
+    # juicefs block carries no identity settings of its own.
     juicefs:
       url: ${JUICEFS_MCP_URL}                       # e.g. http://localhost:8000/mcp
       name: juicefs

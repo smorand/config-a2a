@@ -1,40 +1,31 @@
-"""Native JuiceFS support: model desugaring, prompt injection, identity flow."""
+"""Native JuiceFS support: model desugaring, prompt injection, filter merge.
+
+Identity is server-wide and JWT-only; the inbound/outbound JWT flow is covered
+in ``tests/unit/test_identity_jwt.py``. Here we exercise the parts that are
+identity-agnostic plus the JWT-only shape of the compiled MCP server.
+"""
 
 from __future__ import annotations
 
 from pathlib import Path
 
 import pytest
-from starlette.applications import Starlette
-from starlette.requests import Request
-from starlette.responses import JSONResponse
-from starlette.routing import Route
-from starlette.testclient import TestClient
 
-from config_a2a.a2a.sse import SseEmitter
 from config_a2a.config.juicefs import JuiceFSConfig
 from config_a2a.config.loader import load_server_config
 from config_a2a.config.models import (
     AgentConfig,
     McpStreamableHttpServer,
-    ServerConfig,
-    ServerIdentityConfig,
     ToolFilters,
-)
-from config_a2a.identity import (
-    DEFAULT_FORWARDED_USER_HEADER,
-    IdentityCaptureMiddleware,
-    bind_user,
-    current_user,
-    reset_user,
 )
 from config_a2a.juicefs.binding import compile_juicefs, juicefs_prompt_suffix, merge_filters
 from config_a2a.mcp.streamable_http import _request_headers
 from config_a2a.providers.base import ChatRequest, ChatResponse, LlmProvider, TokenUsage
 from config_a2a.runtime import AgentRuntime
-from tests.unit.conftest import example_yaml
+from config_a2a.a2a.sse import SseEmitter
 
 EXAMPLES = Path(__file__).resolve().parents[2] / "config_examples"
+JWT_EXAMPLE = EXAMPLES / "09-juicefs" / "agents-jwt.yaml"
 
 
 def _agent(**juicefs: object) -> AgentConfig:
@@ -51,8 +42,10 @@ def _agent(**juicefs: object) -> AgentConfig:
 # --- model + desugaring -----------------------------------------------------
 
 
-def test_juicefs_block_desugars_to_identity_forwarding_server() -> None:
-    agent = _agent(default_mount_id="perso-alice", service_identity="svc-bot")
+def test_juicefs_block_desugars_to_jwt_forwarding_server() -> None:
+    # Standalone agent validation (no server identity yet): JWT header default,
+    # no service credential until the server-level pass folds in identity.
+    agent = _agent(default_mount_id="perso-alice")
     assert agent.juicefs is not None
     servers = agent.tools.mcp_servers
     assert len(servers) == 1
@@ -61,15 +54,15 @@ def test_juicefs_block_desugars_to_identity_forwarding_server() -> None:
     assert server.name == "juicefs"
     assert server.url == "http://localhost:8000/mcp"
     assert server.forward_identity is True
-    assert server.identity_header == "X-Forwarded-User"
-    assert server.service_identity == "svc-bot"
+    assert server.identity_header == "X-Forwarded-Authorization"
+    assert server.service_credential is None
 
 
-def test_juicefs_custom_name_and_header() -> None:
-    agent = _agent(name="vol", identity={"forwarded_user_header": "X-User"})
+def test_juicefs_custom_name() -> None:
+    agent = _agent(name="vol")
     server = agent.tools.mcp_servers[0]
     assert server.name == "vol"
-    assert server.identity_header == "X-User"
+    assert server.identity_header == "X-Forwarded-Authorization"
 
 
 def test_desugaring_is_idempotent_on_revalidation() -> None:
@@ -91,9 +84,10 @@ def test_no_juicefs_block_means_no_extra_server() -> None:
 
 
 def test_compile_juicefs_direct() -> None:
-    server = compile_juicefs(JuiceFSConfig(url="http://h/mcp", name="jfs", service_identity="svc"))
+    server = compile_juicefs(JuiceFSConfig(url="http://h/mcp", name="jfs"))
     assert server.forward_identity is True
-    assert server.service_identity == "svc"
+    assert server.identity_header == "X-Forwarded-Authorization"
+    assert server.service_credential is None
     assert server.headers == {}
 
 
@@ -158,76 +152,9 @@ def test_request_headers_no_forwarding() -> None:
     assert _request_headers(server, discovery=False) == {"A": "b"}
 
 
-def test_request_headers_discovery_uses_service_identity() -> None:
-    server = compile_juicefs(JuiceFSConfig(url="http://h/mcp", service_identity="svc-bot"))
-    headers = _request_headers(server, discovery=True)
-    assert headers["X-Forwarded-User"] == "svc-bot"
-
-
-def test_request_headers_call_uses_bound_user() -> None:
-    server = compile_juicefs(JuiceFSConfig(url="http://h/mcp", service_identity="svc-bot"))
-    token = bind_user("alice")
-    try:
-        headers = _request_headers(server, discovery=False)
-    finally:
-        reset_user(token)
-    assert headers["X-Forwarded-User"] == "alice"
-
-
-def test_request_headers_call_without_user_omits_header() -> None:
+def test_request_headers_call_without_credential_omits_header() -> None:
     server = compile_juicefs(JuiceFSConfig(url="http://h/mcp"))
-    assert current_user() is None
-    assert "X-Forwarded-User" not in _request_headers(server, discovery=False)
-
-
-# --- inbound identity capture (middleware) ----------------------------------
-
-
-def _identity_probe_app(header_name: str) -> Starlette:
-    async def whoami(_request: Request) -> JSONResponse:
-        return JSONResponse({"user": current_user()})
-
-    app = Starlette(routes=[Route("/whoami", whoami)])
-    app.add_middleware(IdentityCaptureMiddleware, identity=ServerIdentityConfig(inbound_header=header_name))
-    return app
-
-
-def test_middleware_binds_forwarded_user() -> None:
-    client = TestClient(_identity_probe_app(DEFAULT_FORWARDED_USER_HEADER))
-    resp = client.get("/whoami", headers={"X-Forwarded-User": "bob"})
-    assert resp.json() == {"user": "bob"}
-
-
-def test_middleware_binds_none_when_header_absent() -> None:
-    client = TestClient(_identity_probe_app(DEFAULT_FORWARDED_USER_HEADER))
-    assert client.get("/whoami").json() == {"user": None}
-
-
-def test_middleware_custom_header_name() -> None:
-    client = TestClient(_identity_probe_app("X-User"))
-    resp = client.get("/whoami", headers={"X-User": "carol"})
-    assert resp.json() == {"user": "carol"}
-
-
-# --- server-level inbound identity header -----------------------------------
-
-
-def test_server_identity_header_defaults() -> None:
-    server = ServerConfig.model_validate({"name": "s", "admin": {"enabled": True}})
-    assert server.identity.inbound_header == DEFAULT_FORWARDED_USER_HEADER
-
-
-def test_server_identity_header_override() -> None:
-    server = ServerConfig.model_validate(
-        {"name": "s", "admin": {"enabled": True}, "identity": {"inbound_header": "X-User"}}
-    )
-    assert server.identity.inbound_header == "X-User"
-
-
-def test_server_identity_header_drives_middleware() -> None:
-    server = load_server_config(example_yaml("09-juicefs"))
-    client = TestClient(_identity_probe_app(server.identity.inbound_header))
-    assert client.get("/whoami", headers={"X-Forwarded-User": "dave"}).json() == {"user": "dave"}
+    assert "X-Forwarded-Authorization" not in _request_headers(server, discovery=False)
 
 
 # --- example ----------------------------------------------------------------
@@ -283,11 +210,15 @@ async def test_runtime_per_message_mount_overrides_default() -> None:
 
 
 def test_example_09_loads_and_desugars() -> None:
-    server = load_server_config(example_yaml("09-juicefs"))
+    server = load_server_config(JWT_EXAMPLE)
     agent = server.agents[0]
     assert agent.slug == "files"
     assert agent.juicefs is not None
-    assert any(s.name == "juicefs" and s.forward_identity for s in agent.tools.mcp_servers)
+    juicefs_servers = [s for s in agent.tools.mcp_servers if s.name == "juicefs"]
+    assert len(juicefs_servers) == 1
+    compiled = juicefs_servers[0]
+    assert compiled.forward_identity is True
+    assert compiled.identity_header == "X-Forwarded-Authorization"
 
 
 if __name__ == "__main__":  # pragma: no cover

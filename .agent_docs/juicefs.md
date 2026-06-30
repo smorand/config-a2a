@@ -10,8 +10,12 @@ operational reference.
 ## YAML
 
 ```yaml
-identity:                              # ServerConfig level: inbound header (default below)
-  inbound_header: X-Forwarded-User
+identity:                              # ServerConfig level: JWT verification (the only mode)
+  public_key_path: .keys/jwt.pub       # RS256 verifier public key (required)
+  header: X-Forwarded-Authorization    # inbound Bearer JWT header (default)
+  issuer: web-a2a                       # pinned issuer (default)
+  claim: email                          # identity claim bound as the end user (default)
+  service_token_path: .keys/service.jwt # Bearer presented during tool discovery
 
 agents:
   - slug: files
@@ -22,11 +26,7 @@ agents:
     juicefs:
       url: ${JUICEFS_MCP_URL}            # mcp-juicefs streamable-http endpoint, e.g. http://host:8000/mcp
       name: juicefs                      # MCP server name; tools surface as juicefs.fs.*
-      identity:
-        mode: forwarded_user             # v1: trusted network, X-Forwarded-User
-        forwarded_user_header: X-Forwarded-User   # OUTBOUND header to mcp-juicefs
       default_mount_id: ${JUICEFS_DEFAULT_MOUNT_ID}   # optional "current project"
-      service_identity: ${JUICEFS_SERVICE_IDENTITY}   # identity used for tool discovery
       filters: { include: [], exclude: [] }           # optional, merged into tools.filters
 ```
 
@@ -36,17 +36,24 @@ agents:
 |---|---|---|
 | `url` | required | mcp-juicefs streamable-HTTP endpoint. |
 | `name` | `juicefs` | MCP server name; tools are `name.fs.*`. |
-| `identity.mode` | `forwarded_user` | v1 only mode (trusted network). |
-| `identity.forwarded_user_header` | `X-Forwarded-User` | **Outbound** header sent to mcp-juicefs. The **inbound** header is the server-level `identity.inbound_header`. |
 | `default_mount_id` | `null` | Volume surfaced to the model as its current project. |
-| `service_identity` | `null` | Identity forwarded during tool discovery (no end user in context). |
 | `filters` | empty | Optional include/exclude tool filters, merged (deduplicated union) into `tools.filters`. |
 
-Server-level (`ServerConfig`):
+The `juicefs:` block carries no identity settings: identity is entirely
+server-wide and JWT-based (the verified Bearer credential is re-forwarded to
+mcp-juicefs, and the service token is used for tool discovery).
+
+Server-level (`ServerConfig.identity`, the only end-user identity mechanism):
 
 | Field | Default | Meaning |
 |---|---|---|
-| `identity.inbound_header` | `X-Forwarded-User` | Trusted request header the A2A boundary reads to identify the end user. |
+| `public_key_path` | required | RS256 public key verifying the inbound Bearer JWT. |
+| `header` | `X-Forwarded-Authorization` | Inbound (and re-forwarded outbound) Bearer JWT header. |
+| `algorithms` | `[RS256]` | Accepted JWT signature algorithms. |
+| `issuer` | `web-a2a` | Pinned `iss` claim. |
+| `audience` | `null` | Optional `aud` check (off by default). |
+| `claim` | `email` | JWT claim bound as the end user. |
+| `service_token_path` | `null` | Pre-minted service JWT presented (as `Bearer`) during tool discovery. |
 
 ## Tool names: dots are sanitized for the LLM
 
@@ -69,8 +76,8 @@ At load time the `juicefs:` block compiles into an entry appended to
   transport: streamable-http
   url: <url>
   forward_identity: true
-  identity_header: <identity.forwarded_user_header>
-  service_identity: <service_identity>
+  identity_header: <ServerConfig.identity.header>   # default X-Forwarded-Authorization
+  service_credential: "Bearer <contents of ServerConfig.identity.service_token_path>"
 ```
 
 The desugaring runs in the `AgentConfig` validator, so it also applies to agents
@@ -81,34 +88,31 @@ grows on revalidation).
 It also folds `juicefs.filters` into the agent-wide `tools.filters` (see
 "Tool filters" below).
 
-## Identity: inbound (server) vs outbound (per juicefs block)
+## Identity: server-wide JWT (the only mechanism)
 
-The **inbound** header (what the A2A boundary reads to identify the end user) is
-a **server-wide** setting; the **outbound** header (what is forwarded to
-mcp-juicefs) is configured per `juicefs:` block. They are independent.
+Identity is a single **server-wide** JWT setting; there is no per-`juicefs`-block
+identity and no `forwarded_user` trust mode. The contract: RS256, claim `email`,
+`iss == web-a2a`, no audience, inbound on `X-Forwarded-Authorization`.
 
 ```yaml
-identity:                     # ServerConfig level
-  inbound_header: X-Forwarded-User   # default
-agents:
-  - slug: files
-    juicefs:
-      identity:
-        forwarded_user_header: X-Forwarded-User   # outbound header to mcp-juicefs
+identity:                          # ServerConfig level
+  public_key_path: .keys/jwt.pub
+  service_token_path: .keys/service.jwt
 ```
 
 Propagation:
 
-1. `IdentityCaptureMiddleware` (installed in `create_app`) reads
-   `ServerConfig.identity.inbound_header` and binds the value to a `ContextVar`
-   (`config_a2a.identity.current_user`). One server-wide header, no per-agent
-   ambiguity.
-2. `streamable_http.call_tool` injects that user into the juicefs server's
-   `identity_header` on the outbound call. With no user bound (discovery), the
-   `service_identity` is used instead.
+1. `IdentityCaptureMiddleware` (installed in `create_app`) verifies the inbound
+   Bearer JWT on `ServerConfig.identity.header`, binds the `email` claim to
+   `config_a2a.identity.current_user` and the raw `Bearer <jwt>` to
+   `current_credential`. A missing or invalid token yields `401`.
+2. `streamable_http.call_tool` re-forwards that same `Bearer <jwt>` on the
+   juicefs server's `identity_header`. With no user bound (tool discovery), the
+   static `service_credential` (`Bearer <service token>`) is used instead.
 
-The caller is responsible for having authenticated the user upstream; use only
-on a trusted/private network in v1.
+When no `identity:` block is configured the middleware is a pass-through and no
+end user is bound (anonymous); a juicefs agent then has no caller identity to
+forward, so configure `identity:` for any per-user deployment.
 
 ## Tool filters
 
@@ -148,14 +152,16 @@ model can never touch a volume outside the authenticated person.
 export OPENROUTER_API_KEY=...
 export JUICEFS_MCP_URL=http://localhost:8000/mcp
 export JUICEFS_DEFAULT_MOUNT_ID=perso-alice      # optional
-export JUICEFS_SERVICE_IDENTITY=svc-config-a2a   # needed for discovery
-uv run agent --config config_examples/09-juicefs/agents.yaml --port 9009
+uv run agent --config config_examples/09-juicefs/agents-jwt.yaml --port 9019
 
-curl -X POST http://localhost:9009/agents/files/message:send \
+curl -X POST http://localhost:9019/agents/files/message:send \
   -H 'Content-Type: application/json' \
-  -H 'X-Forwarded-User: alice' \
+  -H "X-Forwarded-Authorization: Bearer ${END_USER_JWT}" \
   -d '{"message":{"messageId":"q1","role":"ROLE_USER","parts":[{"text":"List my volumes"}]}}'
 ```
+
+`END_USER_JWT` is an RS256 token minted by `web-a2a` (claim `email`, `iss`
+`web-a2a`), verified here against `identity.public_key_path`.
 
 Volumes must be pre-provisioned on mcp-juicefs (out of band); config-a2a does
 not provision.

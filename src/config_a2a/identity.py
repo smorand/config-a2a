@@ -1,4 +1,4 @@
-"""Per-request end-user identity propagation (mode-aware: forwarded_user | jwt).
+"""Per-request end-user identity propagation (JWT, the only mechanism).
 
 config-a2a forwards the identity of the **end user** (the person on whose behalf
 an agent acts) to downstream MCP servers that enforce per-user access control,
@@ -6,16 +6,12 @@ most notably ``mcp-juicefs``. The identity is captured once at the A2A boundary
 by an ASGI middleware and stored in :class:`~contextvars.ContextVar`. Outbound
 MCP transports read it without threading the value through every call.
 
-The capture mode is server-wide (one mode per process) and strict, with no
-per-request fallback:
-
-* ``forwarded_user``: a trusted header (default ``X-Forwarded-User``) carries the
-  bare email. A missing header binds ``None`` (anonymous / discovery).
-* ``jwt``: a ``Bearer <jwt>`` credential on ``jwt.header`` (default
-  ``X-Forwarded-Authorization``) is signature-verified; the ``email`` claim is
-  bound as the user and the raw ``Bearer <jwt>`` is bound as the pass-through
-  credential. ``X-Forwarded-User`` is ignored; a missing or invalid token
-  yields ``401``.
+The capture is strict and JWT-only, with no per-request fallback: a
+``Bearer <jwt>`` credential on ``identity.header`` (default
+``X-Forwarded-Authorization``) is signature-verified; the ``email`` claim is
+bound as the user and the raw ``Bearer <jwt>`` is bound as the pass-through
+credential. A missing or invalid token yields ``401``. When no ``identity:`` is
+configured on the server the middleware is a pass-through (no end user is bound).
 
 Pure ASGI middleware is used (not ``BaseHTTPMiddleware``) so the context vars
 propagate correctly into the request task.
@@ -35,8 +31,6 @@ from config_a2a.config.models import ServerIdentityConfig
 
 if TYPE_CHECKING:  # pragma: no cover
     from starlette.types import ASGIApp, Receive, Scope, Send
-
-DEFAULT_FORWARDED_USER_HEADER = "X-Forwarded-User"
 
 _current_user: ContextVar[str | None] = ContextVar("config_a2a_current_user", default=None)
 _current_credential: ContextVar[str | None] = ContextVar("config_a2a_current_credential", default=None)
@@ -73,61 +67,54 @@ def reset_credential(token: Token[str | None]) -> None:
 
 
 class IdentityCaptureMiddleware:  # pylint: disable=too-few-public-methods
-    """ASGI middleware binding the end-user identity per the server-wide mode.
+    """ASGI middleware binding the end-user identity by verifying a Bearer JWT.
 
-    Constructed from the full :class:`ServerIdentityConfig`. In ``forwarded_user``
-    mode it reads ``inbound_header`` verbatim (missing -> ``None``, never ``401``).
-    In ``jwt`` mode it verifies the Bearer JWT on ``jwt.header``, binds the
-    ``email`` claim plus the raw credential, and answers ``401`` on a missing or
-    invalid token (``X-Forwarded-User`` is ignored).
+    Constructed from the server-wide :class:`ServerIdentityConfig`. It verifies
+    the Bearer JWT on ``identity.header``, binds the ``email`` claim plus the raw
+    ``Bearer <jwt>`` credential, and answers ``401`` on a missing or invalid
+    token. When ``identity`` is ``None`` (no ``identity:`` block configured) the
+    middleware is a pass-through: no end user is bound and no request is rejected.
     """
 
     __slots__ = ("_app", "_identity", "_public_key")
 
     def __init__(self, app: "ASGIApp", identity: ServerIdentityConfig | None = None) -> None:
         self._app = app
-        self._identity = identity if identity is not None else ServerIdentityConfig()
+        self._identity = identity
         self._public_key: str | None = None
-        if self._identity.mode == "jwt":
-            jwt_config = self._identity.jwt
-            if jwt_config is None:  # pragma: no cover - guarded by ServerIdentityConfig validator
-                raise ValueError("identity.mode is 'jwt' but identity.jwt is not configured")
-            self._public_key = Path(jwt_config.public_key_path).read_text(encoding="utf-8")
+        if identity is not None:
+            self._public_key = Path(identity.public_key_path).read_text(encoding="utf-8")
 
     async def __call__(self, scope: "Scope", receive: "Receive", send: "Send") -> None:
-        if scope["type"] != "http":
+        if scope["type"] != "http" or self._identity is None:
             await self._app(scope, receive, send)
             return
         headers = Headers(scope=scope)
-        if self._identity.mode == "jwt":
-            await self._handle_jwt(headers, scope, receive, send)
-            return
-        person = headers.get(self._identity.inbound_header, "").strip() or None
-        await self._run(person, None, scope, receive, send)
+        await self._handle_jwt(headers, scope, receive, send)
 
     async def _handle_jwt(self, headers: Headers, scope: "Scope", receive: "Receive", send: "Send") -> None:
-        jwt_config = self._identity.jwt
-        assert jwt_config is not None and self._public_key is not None  # constructor guarantees
-        authorization = headers.get(jwt_config.header, "")
+        identity = self._identity
+        assert identity is not None and self._public_key is not None  # constructor guarantees
+        authorization = headers.get(identity.header, "")
         if not authorization.lower().startswith("bearer "):
-            await _send_unauthorized(send, f"missing Bearer token in {jwt_config.header}")
+            await _send_unauthorized(send, f"missing Bearer token in {identity.header}")
             return
         token = authorization[len("Bearer ") :].strip()
         try:
             claims = jwt.decode(
                 token,
                 self._public_key,
-                algorithms=jwt_config.algorithms,
-                audience=jwt_config.audience,
-                issuer=jwt_config.issuer,
-                options={"verify_aud": jwt_config.audience is not None},
+                algorithms=identity.algorithms,
+                audience=identity.audience,
+                issuer=identity.issuer,
+                options={"verify_aud": identity.audience is not None},
             )
         except jwt.PyJWTError as exc:
             await _send_unauthorized(send, f"invalid token: {exc}")
             return
-        person = str(claims.get(jwt_config.claim, "")).strip()
+        person = str(claims.get(identity.claim, "")).strip()
         if not person:
-            await _send_unauthorized(send, f"token missing '{jwt_config.claim}' claim")
+            await _send_unauthorized(send, f"token missing '{identity.claim}' claim")
             return
         await self._run(person, f"Bearer {token}", scope, receive, send)
 
@@ -149,7 +136,7 @@ class IdentityCaptureMiddleware:  # pylint: disable=too-few-public-methods
 
 
 async def _send_unauthorized(send: "Send", detail: str) -> None:
-    """Emit a minimal 401 JSON response (jwt mode, missing or invalid token)."""
+    """Emit a minimal 401 JSON response (missing or invalid Bearer JWT)."""
     body = json.dumps({"error": "unauthenticated", "detail": detail}).encode("utf-8")
     await send(
         {
@@ -165,7 +152,6 @@ async def _send_unauthorized(send: "Send", detail: str) -> None:
 
 
 __all__ = [
-    "DEFAULT_FORWARDED_USER_HEADER",
     "IdentityCaptureMiddleware",
     "bind_credential",
     "bind_user",

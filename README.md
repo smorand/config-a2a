@@ -41,11 +41,12 @@ All providers go through `httpx.AsyncClient` directly; no vendor SDK pinning.
 ### Native JuiceFS
 
 A `juicefs:` block on an agent is sugar over a `streamable-http` MCP server
-(`mcp-juicefs`) with **per-request end-user identity forwarding**
-(`X-Forwarded-User`, v1 trusted network) and an optional `default_mount_id`
-surfaced to the model as its current project. Volumes are provisioned out of
-band; the runtime stays 100% MCP over HTTP (no JuiceFS SDK). See
-`.agent_docs/juicefs.md` and `specs/juicefs-integration.md`.
+(`mcp-juicefs`) with **per-request end-user identity forwarding** (the verified
+Bearer JWT on `X-Forwarded-Authorization`, configured via the server-wide
+`identity:` block) and an optional `default_mount_id` surfaced to the model as
+its current project. Volumes are provisioned out of band; the runtime stays 100%
+MCP over HTTP (no JuiceFS SDK). See `.agent_docs/juicefs.md` and
+`specs/juicefs-integration.md`.
 
 ## Quickstart
 
