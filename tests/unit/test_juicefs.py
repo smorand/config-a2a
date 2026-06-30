@@ -14,7 +14,13 @@ from starlette.testclient import TestClient
 from config_a2a.a2a.sse import SseEmitter
 from config_a2a.config.juicefs import JuiceFSConfig
 from config_a2a.config.loader import load_server_config
-from config_a2a.config.models import AgentConfig, McpStreamableHttpServer, ServerConfig, ToolFilters
+from config_a2a.config.models import (
+    AgentConfig,
+    McpStreamableHttpServer,
+    ServerConfig,
+    ServerIdentityConfig,
+    ToolFilters,
+)
 from config_a2a.identity import (
     DEFAULT_FORWARDED_USER_HEADER,
     IdentityCaptureMiddleware,
@@ -182,7 +188,7 @@ def _identity_probe_app(header_name: str) -> Starlette:
         return JSONResponse({"user": current_user()})
 
     app = Starlette(routes=[Route("/whoami", whoami)])
-    app.add_middleware(IdentityCaptureMiddleware, header_name=header_name)
+    app.add_middleware(IdentityCaptureMiddleware, identity=ServerIdentityConfig(inbound_header=header_name))
     return app
 
 

@@ -43,6 +43,9 @@ _PATH_KEYS: frozenset[str] = frozenset(
         "evaluator_prompt_file",
         "generator_prompt_file",
         "agent_ref",
+        # Identity (jwt mode): resolve key/token files relative to the YAML dir.
+        "public_key_path",
+        "service_token_path",
         # jsonl_path and credentials_path are operational, not content:
         # they are resolved relative to CWD by the exporter / auth layer.
     }

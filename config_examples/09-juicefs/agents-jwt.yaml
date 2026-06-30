@@ -1,0 +1,81 @@
+name: juicefs-server-jwt
+version: 0.1.0
+description: JuiceFS agent with server-wide JWT end-user identity (RS256, iss web-a2a).
+
+server:
+  host: 0.0.0.0
+  port: 9019
+
+# Server-wide identity in JWT mode (one mode per process, strict, no fallback).
+# The A2A boundary verifies a Bearer JWT on `X-Forwarded-Authorization`, binds the
+# `email` claim as the end user, and re-forwards that same Bearer credential to
+# mcp-juicefs. An inbound `X-Forwarded-User` is ignored; a missing or invalid
+# token yields 401. `public_key_path` and `service_token_path` resolve relative
+# to this YAML file (here: the repo's .keys/ directory).
+identity:
+  mode: jwt
+  jwt:
+    public_key_path: ../../.keys/jwt.pub      # RS256 verifier public key
+    header: X-Forwarded-Authorization         # inbound Bearer JWT header
+    algorithms: [RS256]
+    issuer: web-a2a                            # pinned issuer
+    audience: null                             # no audience check
+    claim: email                               # identity claim
+    service_token_path: ../../.keys/service.jwt  # Bearer used for tool discovery
+
+persistence:
+  backend: sqlite
+  url: sqlite+aiosqlite:///./state/juicefs-server-jwt.db
+  run_migrations_on_start: true
+
+observability:
+  otel:
+    enabled: true
+    service_name: juicefs-server-jwt
+    exporter: jsonl
+    jsonl_path: traces/juicefs-server-jwt.jsonl
+
+admin:
+  enabled: true
+
+agents:
+  - slug: files
+    name: juicefs-assistant
+    description: Reads and writes files on the user's JuiceFS volumes.
+    model:
+      provider: openai-compatible
+      model: openrouter/auto:free
+      api_key_env: OPENROUTER_API_KEY
+      base_url: https://openrouter.ai/api/v1
+      extra_headers:
+        HTTP-Referer: https://github.com/smorand/config-a2a
+        X-Title: config-a2a juicefs-assistant
+    pattern:
+      type: react
+      max_iterations: 8
+    prompts:
+      system_file: prompts/system.md
+    # Native JuiceFS block. In JWT mode the outbound identity header and the
+    # discovery credential come from the server-wide `identity.jwt` block above,
+    # so the `juicefs.identity` / `service_identity` keys are not needed here.
+    juicefs:
+      url: ${JUICEFS_MCP_URL}                       # e.g. http://localhost:8000/mcp
+      name: juicefs
+      default_mount_id: ${JUICEFS_DEFAULT_MOUNT_ID}  # optional "current project"
+    confirmations:
+      destructive_hint: prompt
+      per_tool:
+        juicefs.fs.delete: prompt
+        juicefs.fs.move: prompt
+    guardrails:
+      max_loops: 12
+      max_tokens: 16000
+      timeout_seconds: 180
+    skills:
+      - id: files
+        name: JuiceFS files
+        description: List, read, and (with confirmation) modify files on a JuiceFS volume.
+        tags: [filesystem, juicefs]
+        examples:
+          - "List my JuiceFS volumes"
+          - "Read report.md from my marketing project"

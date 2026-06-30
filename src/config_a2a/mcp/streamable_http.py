@@ -10,7 +10,7 @@ from mcp import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
 
 from config_a2a.config.models import McpStreamableHttpServer
-from config_a2a.identity import current_user
+from config_a2a.identity import current_credential, current_user
 from config_a2a.mcp.stdio import StdioToolDescriptor
 
 
@@ -18,14 +18,21 @@ def _request_headers(server: McpStreamableHttpServer, *, discovery: bool) -> dic
     """Build outbound headers, injecting the forwarded identity when enabled.
 
     On a tool *call* the current end user (per-request) is forwarded; during
-    *discovery* there is no end user, so the configured service identity is used
-    so ``list_tools`` passes the downstream auth middleware.
+    *discovery* there is no end user, so the configured service credential is
+    used so ``list_tools`` passes the downstream auth middleware. The value
+    depends on ``identity_mode``: a bare email in ``forwarded_user`` mode, a
+    ``Bearer <jwt>`` string in ``jwt`` mode. A ``None`` value sets no header.
     """
     headers = dict(server.headers)
-    if server.forward_identity:
-        identity = server.service_identity if discovery else current_user()
-        if identity:
-            headers[server.identity_header] = identity
+    if not server.forward_identity:
+        return headers
+    value: str | None
+    if server.identity_mode == "jwt":
+        value = server.service_credential if discovery else current_credential()
+    else:
+        value = server.service_identity if discovery else current_user()
+    if value:
+        headers[server.identity_header] = value
     return headers
 
 

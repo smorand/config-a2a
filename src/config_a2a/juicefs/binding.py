@@ -9,17 +9,47 @@ that teaches the model the ``mount_id`` convention.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from config_a2a.config.juicefs import JuiceFSConfig
-from config_a2a.config.models import McpStreamableHttpServer, ToolFilters
+from config_a2a.config.models import McpStreamableHttpServer, ServerIdentityConfig, ToolFilters
 
 
-def compile_juicefs(juicefs: JuiceFSConfig) -> McpStreamableHttpServer:
-    """Translate a ``juicefs:`` block into an identity-forwarding MCP server."""
+def compile_juicefs(
+    juicefs: JuiceFSConfig,
+    *,
+    server_identity: ServerIdentityConfig | None = None,
+) -> McpStreamableHttpServer:
+    """Translate a ``juicefs:`` block into an identity-forwarding MCP server.
+
+    ``server_identity`` carries the server-wide mode. When it is ``None`` or in
+    ``forwarded_user`` mode the bare end-user email is re-forwarded on the
+    ``forwarded_user_header`` (discovery falls back to ``service_identity``). In
+    ``jwt`` mode the verified ``Bearer <jwt>`` credential is forwarded on the
+    JWT header instead, and discovery uses the static service token.
+    """
+    if server_identity is not None and server_identity.mode == "jwt":
+        jwt_config = server_identity.jwt
+        assert jwt_config is not None  # guaranteed by ServerIdentityConfig validator
+        service_credential: str | None = None
+        if jwt_config.service_token_path:
+            token = Path(jwt_config.service_token_path).read_text(encoding="utf-8").strip()
+            service_credential = f"Bearer {token}"
+        return McpStreamableHttpServer(
+            name=juicefs.name,
+            url=juicefs.url,
+            headers={},
+            forward_identity=True,
+            identity_mode="jwt",
+            identity_header=jwt_config.header,
+            service_credential=service_credential,
+        )
     return McpStreamableHttpServer(
         name=juicefs.name,
         url=juicefs.url,
         headers={},
         forward_identity=True,
+        identity_mode="forwarded_user",
         identity_header=juicefs.identity.forwarded_user_header,
         service_identity=juicefs.service_identity,
     )

@@ -23,6 +23,8 @@ dependencies = [
     # Validation
     "pydantic>=2.9.0",
     "pydantic-settings>=2.6.0",
+    # Identity / end-user JWT verification
+    "pyjwt[crypto]>=2.10.0",
     # Config
     "pyyaml>=6.0.2",
     "python-dotenv>=1.0.1",

@@ -281,7 +281,7 @@ def create_app(server_config: ServerConfig) -> FastAPI:
     # identity-forwarding MCP server) can act on the right person per request.
     app.add_middleware(
         IdentityCaptureMiddleware,
-        header_name=server_config.identity.inbound_header,
+        identity=server_config.identity,
     )
 
     server = Server(server_config, app)
@@ -349,7 +349,7 @@ def create_app_for_runtime(
     app.state.config_a2a_version = __version__
     app.add_middleware(
         IdentityCaptureMiddleware,
-        header_name=server_config.identity.inbound_header,
+        identity=server_config.identity,
     )
     server = Server(server_config, app)
     app.state.server = server
