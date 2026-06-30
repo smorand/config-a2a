@@ -67,3 +67,4 @@ tests/unit / tests/e2e / tests/fixtures
 * `.agent_docs/persistence.md` — schema, Alembic, Postgres vs SQLite.
 * `.agent_docs/memory.md` — `memory:` block, hook flow, store interface, extractor, scopes.
 * `.agent_docs/juicefs.md` — native `juicefs:` block, identity forwarding, `mount_id` convention, per-conversation default. Design: `specs/juicefs-integration.md`.
+* `.agent_docs/identity.md` — end-user identity contract: inbound JWT verification, outbound pass-through / service token, providers, where authorization lives.
