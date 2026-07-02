@@ -1,0 +1,90 @@
+# A simple config-a2a agent wired to mcp-fs (JWT identity), for a MinIO-free
+# local test where mcp-fs runs on a moto server. Everything is SQLite plus moto,
+# so no Postgres and no MinIO are needed.
+#
+# Run mcp-fs first (in the mcp-fs repo):
+#   uv run moto_server -p 5000
+#   uv run mcp-fs serve --config config/moto.yaml            # /mcp on :8080
+# then this server (in the config-a2a repo):
+#   OPENROUTER_API_KEY=... uv run agent --config config_examples/mcp-fs-moto/agents.yaml
+# It serves the agent A2A endpoint at http://127.0.0.1:9100/agents/files
+#
+# Keys resolve relative to this file (config-a2a/.keys). Generate them once from
+# the mcp-fs repo: uv run python scripts/gen_jwt_keys.py
+name: mcp-fs-moto
+version: 0.1.0
+description: A simple agent with mcp-fs filesystem tools (RS256 identity, moto/S3 backend).
+
+server:
+  host: 0.0.0.0
+  port: 9100
+
+# Server-wide identity: verify the RS256 bearer on X-Forwarded-Authorization
+# (issuer web-a2a, email claim) and pass it through to mcp-fs; a service token
+# covers tool discovery. Paths resolve relative to this file.
+identity:
+  public_key_path: ../../.keys/jwt.pub
+  header: X-Forwarded-Authorization
+  algorithms: [RS256]
+  issuer: web-a2a
+  audience: null
+  claim: email
+  service_token_path: ../../.keys/service.jwt
+
+persistence:
+  backend: sqlite
+  url: sqlite+aiosqlite:///./state/mcp-fs-moto.db
+  run_migrations_on_start: true
+
+observability:
+  otel:
+    enabled: true
+    service_name: mcp-fs-moto
+    exporter: jsonl
+    jsonl_path: traces/mcp-fs-moto.jsonl
+
+admin:
+  enabled: true
+
+agents:
+  - slug: files
+    name: files-assistant
+    description: Reads and writes files on the user's mcp-fs volumes.
+    model:
+      provider: openai-compatible
+      # openrouter/auto routes to a capable tool-calling model. Swap for a
+      # specific model if you prefer (a free model may not call tools reliably).
+      model: openrouter/auto
+      api_key_env: OPENROUTER_API_KEY
+      base_url: https://openrouter.ai/api/v1
+      extra_headers:
+        HTTP-Referer: https://github.com/smorand/config-a2a
+        X-Title: mcp-fs files-assistant
+    # The simple pattern loops while the model emits tool calls; enough for a
+    # read/write/list assistant over the fs.* tools.
+    pattern:
+      type: simple
+    prompts:
+      system_file: prompts/system.md
+    # Native juicefs block: desugared into a streamable-http MCP server named
+    # `fs`, pointed at the moto-backed mcp-fs. Tools surface as fs.fs.read, etc.
+    juicefs:
+      url: http://127.0.0.1:8080/mcp
+      name: fs
+      default_mount_id: perso-seb
+    # Demo posture: auto-approve destructive tools so the flow does not block on a
+    # confirmation round trip. Set to prompt for a stricter demo.
+    confirmations:
+      destructive_hint: auto_approve
+    guardrails:
+      max_loops: 8
+      max_tokens: 16000
+      timeout_seconds: 180
+    skills:
+      - id: files
+        name: mcp-fs files
+        description: List, read, and modify files on an mcp-fs volume.
+        tags: [filesystem]
+        examples:
+          - "List my files"
+          - "Read /notes.md"
