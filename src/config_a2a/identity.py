@@ -89,6 +89,15 @@ class IdentityCaptureMiddleware:  # pylint: disable=too-few-public-methods
         if scope["type"] != "http" or self._identity is None:
             await self._app(scope, receive, send)
             return
+        # Only the per-agent A2A action endpoints need the end-user identity. The
+        # agent card and other .well-known discovery documents are public, so a
+        # client fetching them (for example when adding the agent) must not need a
+        # token. Anything outside /agents/ (health, admin, root directory) is left
+        # to its own auth.
+        path = scope.get("path", "")
+        if not path.startswith("/agents/") or "/.well-known/" in path:
+            await self._app(scope, receive, send)
+            return
         headers = Headers(scope=scope)
         await self._handle_jwt(headers, scope, receive, send)
 

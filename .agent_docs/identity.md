@@ -53,6 +53,14 @@ identity, no fallback, no anonymous bypass when `identity:` is configured. When
 no `identity:` block is configured the middleware is a pure pass-through: no end
 user is bound and no request is rejected (anonymous deployment).
 
+Only the per-agent A2A **action** endpoints (`/agents/<slug>/message:...`,
+`/agents/<slug>/tasks...`) are gated. The **agent card** and other discovery
+documents (`/agents/<slug>/.well-known/...`, the root `/.well-known/...`
+directory) are **public**, so a client can fetch the card and add the agent
+before any end user is involved. Anything outside `/agents/` (health, admin) is
+left to its own auth. Reach an agent at `/agents/<slug>` (plural, note the `s`),
+on a connectable host such as `127.0.0.1` rather than the bind address `0.0.0.0`.
+
 `ServerIdentityConfig` fields (`src/config_a2a/config/models.py`):
 
 | Field | Default | Meaning |

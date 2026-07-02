@@ -57,7 +57,16 @@ def _probe_app(identity: ServerIdentityConfig) -> Starlette:
     async def whoami(_request: Request) -> JSONResponse:
         return JSONResponse({"user": current_user(), "credential": current_credential()})
 
-    app = Starlette(routes=[Route("/whoami", whoami)])
+    async def public(_request: Request) -> JSONResponse:
+        return JSONResponse({"ok": True})
+
+    app = Starlette(
+        routes=[
+            Route("/agents/files/tasks", whoami),  # a protected A2A action path
+            Route("/agents/files/.well-known/agent-card.json", public),  # public discovery
+            Route("/health", public),  # public, outside /agents/
+        ]
+    )
     app.add_middleware(IdentityCaptureMiddleware, identity=identity)
     return app
 
@@ -85,7 +94,7 @@ def test_jwt_config_defaults_match_wire_contract() -> None:
 def test_valid_token_binds_user_and_credential() -> None:
     token = _mint(email="alice@example.com")
     client = TestClient(_probe_app(_jwt_identity()))
-    resp = client.get("/whoami", headers={"X-Forwarded-Authorization": f"Bearer {token}"})
+    resp = client.get("/agents/files/tasks", headers={"X-Forwarded-Authorization": f"Bearer {token}"})
     assert resp.status_code == 200
     body = resp.json()
     assert body["user"] == "alice@example.com"
@@ -95,20 +104,20 @@ def test_valid_token_binds_user_and_credential() -> None:
 def test_wrong_issuer_rejected() -> None:
     token = _mint(iss="someone-else")
     client = TestClient(_probe_app(_jwt_identity()))
-    resp = client.get("/whoami", headers={"X-Forwarded-Authorization": f"Bearer {token}"})
+    resp = client.get("/agents/files/tasks", headers={"X-Forwarded-Authorization": f"Bearer {token}"})
     assert resp.status_code == 401
 
 
 def test_missing_bearer_yields_401() -> None:
     client = TestClient(_probe_app(_jwt_identity()))
-    assert client.get("/whoami").status_code == 401
+    assert client.get("/agents/files/tasks").status_code == 401
 
 
 def test_forwarded_user_ignored_in_jwt_mode() -> None:
     token = _mint(email="alice@example.com")
     client = TestClient(_probe_app(_jwt_identity()))
     resp = client.get(
-        "/whoami",
+        "/agents/files/tasks",
         headers={
             "X-Forwarded-Authorization": f"Bearer {token}",
             "X-Forwarded-User": "mallory@example.com",
@@ -120,8 +129,21 @@ def test_forwarded_user_ignored_in_jwt_mode() -> None:
 def test_forwarded_user_does_not_bypass_jwt() -> None:
     # No Bearer token, only X-Forwarded-User: must 401 (no fallback bypass).
     client = TestClient(_probe_app(_jwt_identity()))
-    resp = client.get("/whoami", headers={"X-Forwarded-User": "mallory@example.com"})
+    resp = client.get("/agents/files/tasks", headers={"X-Forwarded-User": "mallory@example.com"})
     assert resp.status_code == 401
+
+
+def test_agent_card_is_public() -> None:
+    # The agent card (discovery) must be reachable without a token, so clients can
+    # add the agent before any end user is involved.
+    client = TestClient(_probe_app(_jwt_identity()))
+    assert client.get("/agents/files/.well-known/agent-card.json").status_code == 200
+
+
+def test_non_agent_path_is_public() -> None:
+    # Paths outside /agents/ (health, admin, root directory) are not gated here.
+    client = TestClient(_probe_app(_jwt_identity()))
+    assert client.get("/health").status_code == 200
 
 
 # --- outbound relay (_request_headers) --------------------------------------
