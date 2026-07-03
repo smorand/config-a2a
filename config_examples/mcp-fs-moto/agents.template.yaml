@@ -4,7 +4,7 @@
 # ${...} with a literal value in this file.
 #
 # Env vars to set (an unset ${VAR} is left as-is, so it will not silently work):
-#   MCP_FS_URL     the mcp-fs endpoint, e.g. http://127.0.0.1:8080/mcp
+#   MCP_FS_URL     the mcp-fs endpoint, e.g. http://127.0.0.1:5002/mcp
 #   MCP_FS_MOUNT   the default project (mount_id), e.g. perso-seb
 #   LLM_MODEL      the model id, e.g. openrouter/auto or a specific model
 #   LLM_BASE_URL   the OpenAI-compatible base URL of your LLM endpoint
@@ -13,14 +13,14 @@
 # Run (from the config-a2a repo), after generating keys from mcp-fs:
 #   MCP_FS_URL=... MCP_FS_MOUNT=... LLM_MODEL=... LLM_BASE_URL=... OPENROUTER_API_KEY=... \
 #     uv run agent --config config_examples/mcp-fs-moto/agents.template.yaml
-# Serves the agent A2A endpoint at http://<host>:9100/agents/files
+# Serves the agent A2A endpoint at http://<host>:5003/agents/files
 name: mcp-fs-agent
 version: 0.1.0
 description: A simple agent with mcp-fs filesystem tools (RS256 identity), host-portable.
 
 server:
   host: 0.0.0.0
-  port: 9100                       # literal (int field): edit here if the port is taken
+  port: 5003                       # literal (int field): edit here if the port is taken
 
 identity:
   public_key_path: ../../.keys/jwt.pub

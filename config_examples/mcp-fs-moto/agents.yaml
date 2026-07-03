@@ -4,10 +4,10 @@
 #
 # Run mcp-fs first (in the mcp-fs repo):
 #   uv run moto_server -p 5000
-#   uv run mcp-fs serve --config config/moto.yaml            # /mcp on :8080
+#   uv run mcp-fs serve --config config/moto.yaml            # /mcp on :5002
 # then this server (in the config-a2a repo):
 #   OPENROUTER_API_KEY=... uv run agent --config config_examples/mcp-fs-moto/agents.yaml
-# It serves the agent A2A endpoint at http://127.0.0.1:9100/agents/files
+# It serves the agent A2A endpoint at http://127.0.0.1:5003/agents/files
 #
 # Keys resolve relative to this file (config-a2a/.keys). Generate them once from
 # the mcp-fs repo: uv run python scripts/gen_jwt_keys.py
@@ -17,7 +17,7 @@ description: A simple agent with mcp-fs filesystem tools (RS256 identity, moto/S
 
 server:
   host: 0.0.0.0
-  port: 9100
+  port: 5003
 
 # Server-wide identity: verify the RS256 bearer on X-Forwarded-Authorization
 # (issuer web-a2a, email claim) and pass it through to mcp-fs; a service token
@@ -69,7 +69,7 @@ agents:
     # Native juicefs block: desugared into a streamable-http MCP server named
     # `fs`, pointed at the moto-backed mcp-fs. Tools surface as fs.fs.read, etc.
     juicefs:
-      url: http://127.0.0.1:8080/mcp
+      url: http://127.0.0.1:5002/mcp
       name: fs
       default_mount_id: perso-seb
     # Demo posture: auto-approve destructive tools so the flow does not block on a
