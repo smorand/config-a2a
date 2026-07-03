@@ -90,6 +90,62 @@ async def test_tool_call_and_complete() -> None:
     assert "echo done" in final["statusUpdate"]["status"]["message"]["parts"][0]["text"]
 
 
+async def test_empty_reply_after_tool_is_nudged_then_answers() -> None:
+    """A blank turn after a tool result is retried, and the model then answers."""
+    scripted = [
+        ChatResponse(
+            content="",
+            tool_calls=[ToolCall(id="tc-1", name="fake.echo", arguments={"text": "hi"})],
+            usage=TokenUsage(input_tokens=1, output_tokens=1),
+        ),
+        ChatResponse(content="   ", usage=TokenUsage(input_tokens=1, output_tokens=0)),  # blank
+        ChatResponse(content="you have 1 file", usage=TokenUsage(input_tokens=2, output_tokens=2)),
+    ]
+    runtime, prefix = await _build_runtime(scripted)
+    client = TestClient(create_app_for_runtime(runtime))
+    with client.stream(
+        "POST",
+        f"{prefix}/message:stream",
+        json={"message": {"messageId": "m1", "role": "ROLE_USER", "parts": [{"text": "go"}]}},
+    ) as response:
+        body = "".join(response.iter_text())
+    final = _final_status(body)
+    assert final["statusUpdate"]["status"]["state"] == "TASK_STATE_COMPLETED"
+    assert "you have 1 file" in final["statusUpdate"]["status"]["message"]["parts"][0]["text"]
+    # The recovery re-prompted the model: a nudge user turn precedes the answer.
+    provider = runtime.provider
+    assert isinstance(provider, _ScriptedProvider)
+    assert len(provider.calls) == 3
+    assert any("previous reply was empty" in m.content for m in provider.calls[-1].messages)
+
+
+async def test_persistent_empty_reply_falls_back_to_a_clear_message() -> None:
+    """If the model stays blank, surface a clear notice, never an empty bubble."""
+    blank = ChatResponse(content="", usage=TokenUsage(input_tokens=1, output_tokens=0))
+    scripted = [
+        ChatResponse(
+            content="",
+            tool_calls=[ToolCall(id="tc-1", name="fake.echo", arguments={"text": "hi"})],
+            usage=TokenUsage(input_tokens=1, output_tokens=1),
+        ),
+        blank,
+        blank,
+        blank,
+    ]
+    runtime, prefix = await _build_runtime(scripted)
+    client = TestClient(create_app_for_runtime(runtime))
+    with client.stream(
+        "POST",
+        f"{prefix}/message:stream",
+        json={"message": {"messageId": "m1", "role": "ROLE_USER", "parts": [{"text": "go"}]}},
+    ) as response:
+        body = "".join(response.iter_text())
+    final = _final_status(body)
+    assert final["statusUpdate"]["status"]["state"] == "TASK_STATE_COMPLETED"
+    text = final["statusUpdate"]["status"]["message"]["parts"][0]["text"]
+    assert "no text answer" in text
+
+
 async def test_destructive_tool_triggers_input_required_and_resumes() -> None:
     scripted = [
         ChatResponse(

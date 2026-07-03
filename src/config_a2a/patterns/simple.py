@@ -16,6 +16,17 @@ from config_a2a.providers.base import ChatMessage
 
 log = logging.getLogger(__name__)
 
+# Recovery for a model that finishes a turn with no tool call and no text.
+_MAX_EMPTY_RETRIES = 2
+_EMPTY_NUDGE = (
+    "Your previous reply was empty. Using the tool results above, answer the "
+    "user's request now in plain text."
+)
+_EMPTY_FALLBACK = (
+    "I ran the requested tools but the model returned no text answer. "
+    "The tool results are shown above; please rephrase or try again."
+)
+
 
 async def run_simple(ctx: ExecutionContext) -> None:
     """``pattern.type == 'simple'``: loop while the model emits tool_calls."""
@@ -34,6 +45,7 @@ async def run_simple(ctx: ExecutionContext) -> None:
     max_tokens = ctx.config.guardrails.max_tokens
     total_tokens = 0
     final_text = ""
+    empty_retries = 0
 
     for _ in range(max_loops):
         if ctx.cancel_event.is_set():
@@ -44,7 +56,19 @@ async def run_simple(ctx: ExecutionContext) -> None:
             raise PatternError(f"max_tokens exceeded ({total_tokens} > {max_tokens})")
 
         if not response.tool_calls:
-            final_text = response.content
+            if response.content.strip():
+                final_text = response.content
+                break
+            # Empty final turn: some models (e.g. Claude behind an OpenAI-compat
+            # shim) return no text after a tool result. Nudge for a concrete
+            # answer a bounded number of times before surfacing a clear fallback,
+            # so the user never sees a silently blank reply.
+            if empty_retries < _MAX_EMPTY_RETRIES:
+                empty_retries += 1
+                await emit_thinking(ctx, "(model returned an empty reply; asking it to answer)")
+                messages.append(ChatMessage(role="user", content=_EMPTY_NUDGE))
+                continue
+            final_text = _EMPTY_FALLBACK
             break
 
         messages.append(ChatMessage(role="assistant", content=response.content or "", tool_calls=response.tool_calls))
