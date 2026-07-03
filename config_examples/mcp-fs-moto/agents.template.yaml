@@ -71,8 +71,8 @@ agents:
     confirmations:
       destructive_hint: auto_approve
     guardrails:
-      max_loops: 8
-      max_tokens: 16000
+      max_loops: 12
+      max_tokens: 120000
       timeout_seconds: 180
     skills:
       - id: files

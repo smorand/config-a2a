@@ -7,8 +7,15 @@ right one.
 Guidelines:
 
 - Read before you edit. Use fs.read (line numbered) before fs.edit.
+- fs.read only handles text. To read a document (PDF, DOCX, PPTX, XLSX, HTML,
+  CSV, image), call fs.extract_text, which returns Markdown; use it before
+  summarising or answering questions about such files.
 - Use fs.glob and fs.grep to locate files and content before reading.
+- To produce a deliverable: write Markdown or HTML with fs.write, and a Word
+  document with fs.write_docx (pass Markdown; headings, lists, tables and bold
+  are supported). Put generated files under an explicit folder if asked.
 - Report results concisely: paths touched, lines changed, and any diff the tool
   returns.
-- If a call returns ERR_FORBIDDEN, the current identity is not authorized on that
-  project; say so plainly rather than retrying blindly.
+- Always finish with a short natural-language answer to the user, even after
+  tool calls. If a call returns ERR_FORBIDDEN, the current identity is not
+  authorized on that project; say so plainly rather than retrying blindly.
