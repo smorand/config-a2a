@@ -16,7 +16,7 @@ from config_a2a.mcp.client import McpRegistry
 from config_a2a.memory import MemoryOrchestrator
 from config_a2a.patterns import ExecutionContext, get_runner
 from config_a2a.patterns.base import PatternError
-from config_a2a.providers.base import LlmProvider
+from config_a2a.providers.base import ChatMessage, LlmProvider
 from config_a2a.providers.registry import build_provider
 
 
@@ -44,6 +44,7 @@ class TaskStore(Protocol):  # pragma: no cover — structural
     ) -> None: ...
     async def append_message(self, task_id: str, message: Message) -> None: ...
     async def list_recent(self, limit: int = ...) -> list[Any]: ...
+    async def history_for_context(self, context_id: str) -> list[Message]: ...
     async def record_step(self, *, task_id: str, kind: str, payload: dict[str, Any], summary: str = ...) -> None: ...
 
 
@@ -96,10 +97,35 @@ class InMemoryTaskStore:
         async with self._lock:
             return list(self._tasks.values())[-limit:][::-1]
 
+    async def history_for_context(self, context_id: str) -> list[Message]:
+        async with self._lock:
+            out: list[Message] = []
+            for record in self._tasks.values():
+                if record.context_id == context_id:
+                    out.extend(record.history)
+            return out
+
     async def record_step(
         self, *, task_id: str, kind: str, payload: dict[str, Any], summary: str = ""
     ) -> None:  # pragma: no cover — in-memory has no run-step table
         return None
+
+
+def _conversation_history(messages: list[Message]) -> list[ChatMessage]:
+    """Convert stored A2A messages to ChatMessage history, dropping the trailing current turn.
+
+    The route appends the current user message before running, so it is last in the context;
+    exclude it (the pattern re-adds it from ``user_text``). Only text turns are carried.
+    """
+    prior = messages[:-1] if messages else []
+    out: list[ChatMessage] = []
+    for message in prior:
+        text = "".join(getattr(part, "text", "") or "" for part in message.parts)
+        if not text.strip():
+            continue
+        role = "user" if message.role == "ROLE_USER" else "assistant"
+        out.append(ChatMessage(role=role, content=text))
+    return out
 
 
 class AgentRuntime:
@@ -196,6 +222,12 @@ class AgentRuntime:
             if injected:
                 system_prompt = f"{system_prompt}\n\n{injected}" if system_prompt else injected
 
+        # Multi-turn memory: load prior conversation turns for this context and feed them to the
+        # pattern (which does messages.extend(ctx.history)). The current user message was already
+        # appended by the route, so it is the trailing entry — drop it to avoid duplicating the
+        # user turn the pattern re-adds from user_text.
+        history = _conversation_history(await self.tasks.history_for_context(task.context_id))
+
         ctx = ExecutionContext(
             config=self.config,
             user_text=user_text,
@@ -208,6 +240,7 @@ class AgentRuntime:
             tools=list(self.mcp.specs),
             mcp=self.mcp,
             memory=self.memory,
+            history=history,
         )
         try:
             with tracer.start_as_current_span(
