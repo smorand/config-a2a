@@ -10,12 +10,31 @@ from mcp import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
 
 from config_a2a.config.models import McpStreamableHttpServer
+from config_a2a.identity import current_credential
 from config_a2a.mcp.stdio import StdioToolDescriptor
 
 
+def _request_headers(server: McpStreamableHttpServer, *, discovery: bool) -> dict[str, str]:
+    """Build outbound headers, injecting the forwarded JWT credential when enabled.
+
+    On a tool *call* the current end user's pass-through ``Bearer <jwt>`` is
+    forwarded; during *discovery* there is no end user, so the static
+    ``service_credential`` (``Bearer <service token>``) is used so ``list_tools``
+    passes the downstream auth middleware. A ``None`` value sets no header.
+    """
+    headers = dict(server.headers)
+    if not server.forward_identity:
+        return headers
+    value = server.service_credential if discovery else current_credential()
+    if value:
+        headers[server.identity_header] = value
+    return headers
+
+
 @asynccontextmanager
-async def _open_session(server: McpStreamableHttpServer) -> AsyncIterator[ClientSession]:
-    async with streamablehttp_client(url=server.url, headers=dict(server.headers)) as (read, write, _):
+async def _open_session(server: McpStreamableHttpServer, *, discovery: bool = False) -> AsyncIterator[ClientSession]:
+    headers = _request_headers(server, discovery=discovery)
+    async with streamablehttp_client(url=server.url, headers=headers) as (read, write, _):
         async with ClientSession(read, write) as session:
             await session.initialize()
             yield session
@@ -23,7 +42,7 @@ async def _open_session(server: McpStreamableHttpServer) -> AsyncIterator[Client
 
 async def discover_tools(server: McpStreamableHttpServer) -> list[StdioToolDescriptor]:
     async def _list() -> list[StdioToolDescriptor]:
-        async with _open_session(server) as session:
+        async with _open_session(server, discovery=True) as session:
             response = await session.list_tools()
         return [_descriptor(server.name, tool) for tool in response.tools]
 

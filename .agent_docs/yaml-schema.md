@@ -15,6 +15,15 @@ server:
   host: 0.0.0.0                  # default
   port: 9000                     # default
 
+identity:                        # optional; turns on JWT end-user verification (the only mode)
+  public_key_path: .keys/jwt.pub     # required when identity is set; RS256 verifier
+  header: X-Forwarded-Authorization  # default; inbound Bearer JWT header
+  algorithms: [RS256]                # default
+  issuer: web-a2a                    # default; pinned issuer
+  audience: null                     # default; no audience check
+  claim: email                       # default; identity claim bound as the end user
+  service_token_path: .keys/service.jwt  # Bearer presented during tool discovery
+
 persistence:                     # shared by all agents unless overridden
   backend: sqlite                # sqlite | postgresql
   url: sqlite+aiosqlite:///./state/server.db
@@ -96,6 +105,12 @@ agents: []                       # one entry per mounted agent (may be empty)
   tools:
     mcp_servers: [...]
     filters: { include: [...], exclude: [...] }
+
+  juicefs:                       # optional; sugar over an mcp-juicefs streamable-http server
+    url: ${JUICEFS_MCP_URL}      # full field reference in .agent_docs/juicefs.md
+    name: juicefs
+    default_mount_id: perso-alice   # identity comes from the server-wide identity: block (JWT)
+    filters: { include: [], exclude: [] }   # merged (deduplicated union) into tools.filters
 
   guardrails:
     max_loops: 30

@@ -109,6 +109,21 @@ class TaskRepository:
             )
             return list(result)
 
+    async def list_messages_by_context(self, context_id: str) -> list[MessageRow]:
+        """Every message across all tasks sharing ``context_id`` (this agent), in time order.
+
+        A conversation is a context: the A2A client sends a stable ``contextId`` and one task
+        per turn, so multi-turn memory must span tasks, not a single task.
+        """
+        async with self._session_factory() as session:
+            result = await session.scalars(
+                select(MessageRow)
+                .join(TaskRow, MessageRow.task_id == TaskRow.id)
+                .where(TaskRow.context_id == context_id, TaskRow.agent_slug == self._agent_slug)
+                .order_by(MessageRow.created_at.asc(), MessageRow.position.asc())
+            )
+            return list(result)
+
     async def record_step(self, *, task_id: str, kind: str, payload: dict[str, Any], summary: str = "") -> None:
         async with self._session_factory.begin() as session:
             session.add(RunStepRow(task_id=task_id, kind=kind, payload=payload, summary=summary))

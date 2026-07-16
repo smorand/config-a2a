@@ -2,13 +2,23 @@
 
 All patterns share the `ExecutionContext` (frozen dataclass in `patterns/base.py`) and emit task-state updates via the same SSE channel.
 
+## Destructive-tool confirmation (shared)
+
+`simple` and `react` share the destructive-tool confirmation logic in `patterns/confirm.py` so they never drift. For every tool call annotated `destructiveHint`, `decide_tool` consults `confirmations.policy_for` (which honours `confirmations.destructive_hint` and the `confirmations.per_tool` overrides):
+
+* `auto_approve` runs the tool immediately,
+* `auto_deny` refuses without running (a deny message goes back to the model),
+* `prompt` suspends the task with `TASK_STATE_INPUT_REQUIRED` (`metadata.kind="confirm_tool"`) and persists the pending call.
+
+Resume by re-sending a message with the same `taskId`: `resume_pending` re-executes the persisted call on an approval (`yes`/`approve`) and continues the loop with the tool result in context; anything else cancels cleanly. Non-destructive tools always run immediately.
+
 ## `simple`
 
-One LLM call. If the model emits `tool_calls`, dispatch them and loop. Bounded by `guardrails.max_loops` and `guardrails.max_tokens`. Destructive tools (MCP `annotations.destructiveHint`) route through `guardrails/confirmations.py` and emit a `TASK_STATE_INPUT_REQUIRED` event with `metadata.kind="confirm_tool"`. Resume by re-sending a message with the same `taskId`.
+One LLM call. If the model emits `tool_calls`, dispatch them and loop, applying the shared confirmation flow above. Bounded by `guardrails.max_loops` and `guardrails.max_tokens`.
 
 ## `react`
 
-Same loop, plus an explicit ReAct executor prompt and an anti-loop check (`guardrails.anti_loop`). The anti-loop detector is token-prefix based for the MVP; a cosine-similarity layer is documented as future work and would plug in here.
+Same loop and the same shared confirmation flow, plus an explicit ReAct executor prompt and an anti-loop check (`guardrails.anti_loop`). The anti-loop detector is token-prefix based for the MVP; a cosine-similarity layer is documented as future work and would plug in here.
 
 ## `plan_execute`
 

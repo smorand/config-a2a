@@ -16,6 +16,7 @@ from config_a2a.providers.base import (
     ProviderError,
     TokenUsage,
     ToolCall,
+    ToolNameCodec,
 )
 
 
@@ -50,27 +51,28 @@ class OpenAiCompatibleProvider(LlmProvider):
         return headers
 
     @staticmethod
-    def _serialise_message(msg: ChatMessage) -> dict[str, Any]:
+    def _serialise_message(msg: ChatMessage, codec: ToolNameCodec) -> dict[str, Any]:
         out: dict[str, Any] = {"role": msg.role, "content": msg.content}
         if msg.tool_call_id:
             out["tool_call_id"] = msg.tool_call_id
         if msg.name:
-            out["name"] = msg.name
+            out["name"] = codec.to_wire(msg.name)
         if msg.tool_calls:
             out["tool_calls"] = [
                 {
                     "id": tc.id,
                     "type": "function",
-                    "function": {"name": tc.name, "arguments": json.dumps(tc.arguments)},
+                    "function": {"name": codec.to_wire(tc.name), "arguments": json.dumps(tc.arguments)},
                 }
                 for tc in msg.tool_calls
             ]
         return out
 
     async def chat(self, request: ChatRequest) -> ChatResponse:
+        codec = ToolNameCodec(request.tools)
         payload: dict[str, Any] = {
             "model": request.model or self._model,
-            "messages": [self._serialise_message(m) for m in request.messages],
+            "messages": [self._serialise_message(m, codec) for m in request.messages],
         }
         if request.temperature is not None:
             payload["temperature"] = request.temperature
@@ -81,7 +83,7 @@ class OpenAiCompatibleProvider(LlmProvider):
                 {
                     "type": "function",
                     "function": {
-                        "name": tool.name,
+                        "name": codec.to_wire(tool.name),
                         "description": tool.description,
                         "parameters": tool.parameters,
                     },
@@ -124,7 +126,13 @@ class OpenAiCompatibleProvider(LlmProvider):
                 arguments = json.loads(function.get("arguments") or "{}")
             except json.JSONDecodeError:
                 arguments = {}
-            tool_calls.append(ToolCall(id=raw.get("id") or "", name=function.get("name") or "", arguments=arguments))
+            tool_calls.append(
+                ToolCall(
+                    id=raw.get("id") or "",
+                    name=codec.from_wire(function.get("name") or ""),
+                    arguments=arguments,
+                )
+            )
         usage = data.get("usage") or {}
         return ChatResponse(
             content=content,

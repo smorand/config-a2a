@@ -30,6 +30,7 @@ from config_a2a.config.models import (
     AuthenticationConfig,
     ServerConfig,
 )
+from config_a2a.identity import IdentityCaptureMiddleware
 from config_a2a.observability.otel import setup_otel
 from config_a2a.persistence import run_migrations
 from config_a2a.server import Server
@@ -276,6 +277,12 @@ def create_app(server_config: ServerConfig) -> FastAPI:
         dependencies=[Depends(_agent_auth_dependency())],
     )
     app.state.config_a2a_version = __version__
+    # Capture the end-user identity at the A2A boundary so juicefs (and any
+    # identity-forwarding MCP server) can act on the right person per request.
+    app.add_middleware(
+        IdentityCaptureMiddleware,
+        identity=server_config.identity,
+    )
 
     server = Server(server_config, app)
     app.state.server = server
@@ -340,6 +347,10 @@ def create_app_for_runtime(
         dependencies=[Depends(_agent_auth_dependency())],
     )
     app.state.config_a2a_version = __version__
+    app.add_middleware(
+        IdentityCaptureMiddleware,
+        identity=server_config.identity,
+    )
     server = Server(server_config, app)
     app.state.server = server
 

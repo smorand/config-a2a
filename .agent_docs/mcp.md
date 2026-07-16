@@ -25,6 +25,31 @@ tools:
 
 Exclude wins over include. Without `include`, everything that survives `exclude` is registered.
 
+## Tool-name sanitization at the provider boundary
+
+MCP tools are registered internally under dotted qualified names
+(`<server>.<tool>`, e.g. `juicefs.fs.read`). Every major LLM provider, however,
+constrains function names to `^[a-zA-Z0-9_-]+$` (max 64 chars): **dots are
+illegal**. Standard MCP servers use underscores, so this only surfaces with
+servers that use dots (mcp-juicefs names tools `fs.read`, qualified to
+`juicefs.fs.read`).
+
+The fix is generic and lives entirely at the provider boundary
+(`providers/base.py`): `sanitize_tool_name()` plus a per-request
+`ToolNameCodec`. In each adapter (`openai_compat`, `anthropic`, `google`,
+`vertex`):
+
+- on the outbound request, `codec.to_wire(name)` sanitizes (a) tool
+  declarations, (b) assistant `tool_calls` in history, and (c) tool-result
+  `name`s, consistently;
+- on the response, `codec.from_wire(name)` remaps the model-returned name back
+  to the dotted qualified form.
+
+So the rest of config-a2a (the `McpRegistry` dispatch, `confirmations.per_tool`
+keyed by dotted names) keeps working unchanged. Collisions (two qualified names
+sanitizing to the same wire name) are disambiguated with a `_2`, `_3`, ...
+suffix and logged.
+
 ## Destructive-hint flow
 
 When the LLM emits a `tool_call` for a tool whose MCP `annotations.destructiveHint=true`, `guardrails/confirmations.py` decides:

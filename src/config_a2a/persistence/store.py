@@ -40,6 +40,10 @@ class PersistentTaskStore:
         messages = [_message_from_row(m) for m in await self._repo.list_messages(task_id)]
         return _TaskView(row, history=messages)
 
+    async def history_for_context(self, context_id: str) -> list[Message]:
+        """Prior conversation turns for a context (across tasks), oldest first."""
+        return [_message_from_row(m) for m in await self._repo.list_messages_by_context(context_id)]
+
     async def update_status(
         self,
         task_id: str,

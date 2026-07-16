@@ -1,0 +1,84 @@
+# E-I template: same simple mcp-fs agent, but with placeholders for what changes
+# on another host (the mcp-fs URL and the LLM endpoint + key). Fill them either by
+# setting the environment variables below (recommended) or by replacing each
+# ${...} with a literal value in this file.
+#
+# Env vars to set (an unset ${VAR} is left as-is, so it will not silently work):
+#   MCP_FS_URL     the mcp-fs endpoint, e.g. http://127.0.0.1:5002/mcp
+#   MCP_FS_MOUNT   the default project (mount_id), e.g. perso-seb
+#   LLM_MODEL      the model id, e.g. openrouter/auto or a specific model
+#   LLM_BASE_URL   the OpenAI-compatible base URL of your LLM endpoint
+#   plus the API key env var named by model.api_key_env below (default OPENROUTER_API_KEY)
+#
+# Run (from the config-a2a repo), after generating keys from mcp-fs:
+#   MCP_FS_URL=... MCP_FS_MOUNT=... LLM_MODEL=... LLM_BASE_URL=... OPENROUTER_API_KEY=... \
+#     uv run agent --config config_examples/mcp-fs-moto/agents.template.yaml
+# Serves the agent A2A endpoint at http://<host>:5003/agents/files
+name: mcp-fs-agent
+version: 0.1.0
+description: A simple agent with mcp-fs filesystem tools (RS256 identity), host-portable.
+
+server:
+  host: 0.0.0.0
+  port: 5003                       # literal (int field): edit here if the port is taken
+
+identity:
+  public_key_path: ../../.keys/jwt.pub
+  header: X-Forwarded-Authorization
+  algorithms: [RS256]
+  issuer: web-a2a
+  audience: null
+  claim: email
+  service_token_path: ../../.keys/service.jwt
+
+persistence:
+  backend: sqlite
+  url: sqlite+aiosqlite:///./state/mcp-fs-agent.db
+  run_migrations_on_start: true
+
+observability:
+  otel:
+    enabled: true
+    service_name: mcp-fs-agent
+    exporter: jsonl
+    jsonl_path: traces/mcp-fs-agent.jsonl
+
+admin:
+  enabled: true
+
+agents:
+  - slug: files
+    name: files-assistant
+    description: Reads and writes files on the user's mcp-fs volumes.
+    model:
+      # Keep openai-compatible for OpenRouter or any OpenAI-compatible endpoint;
+      # change to anthropic / google / vertex if that is your provider.
+      provider: openai-compatible
+      model: ${LLM_MODEL}
+      base_url: ${LLM_BASE_URL}
+      api_key_env: OPENROUTER_API_KEY   # name of the env var holding your key; change if different
+      extra_headers:
+        HTTP-Referer: https://github.com/smorand/config-a2a
+        X-Title: mcp-fs files-assistant
+    pattern:
+      type: simple
+    prompts:
+      system_file: prompts/system.md
+    juicefs:
+      url: ${MCP_FS_URL}
+      name: fs
+      default_mount_id: ${MCP_FS_MOUNT}
+    confirmations:
+      destructive_hint: auto_approve
+    guardrails:
+      max_loops: 12
+      max_tokens: 120000
+      timeout_seconds: 180
+    skills:
+      - id: files
+        name: mcp-fs files
+        description: List, read, and modify files on an mcp-fs volume.
+        tags: [filesystem]
+        examples:
+          - "List my files"
+          - "Read /notes.md"

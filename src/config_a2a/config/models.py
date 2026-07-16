@@ -8,9 +8,12 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import TYPE_CHECKING, Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+if TYPE_CHECKING:  # pragma: no cover — forward ref resolved via model_rebuild
+    from config_a2a.config.juicefs import JuiceFSConfig
 
 _SLUG_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 _NON_ALNUM = re.compile(r"[^a-z0-9]+")
@@ -34,6 +37,27 @@ class ServerBindConfig(_Strict):
 
     host: str = "0.0.0.0"  # nosec B104
     port: int = Field(default=9000, ge=1, le=65535)
+
+
+class ServerIdentityConfig(_Strict):
+    """Server-wide end-user identity: signed-JWT verification (the only mode).
+
+    The inbound Bearer JWT on ``header`` is signature-verified with
+    ``public_key_path`` (RS256 by default), the issuer is pinned to ``web-a2a``
+    and the identity is read from the ``email`` claim. A missing or invalid token
+    yields ``401`` at the A2A boundary. ``service_token_path`` points at a
+    pre-minted service JWT presented during tool discovery (no end user in
+    context). ``public_key_path`` is required: configuring ``identity:`` at all
+    means turning on JWT verification.
+    """
+
+    public_key_path: str
+    header: str = "X-Forwarded-Authorization"
+    algorithms: list[str] = Field(default_factory=lambda: ["RS256"])
+    issuer: str | None = "web-a2a"
+    audience: str | None = None
+    claim: str = "email"
+    service_token_path: str | None = None
 
 
 class PersistenceConfig(_Strict):
@@ -80,6 +104,15 @@ class McpStreamableHttpServer(_Strict):
     transport: Literal["streamable-http"] = "streamable-http"
     url: str
     headers: dict[str, str] = Field(default_factory=dict)
+    # Per-request end-user identity forwarding (set by the juicefs desugaring).
+    # When ``forward_identity`` is true the verified ``Bearer <jwt>`` of the
+    # current end user (see ``config_a2a.identity``) is injected into
+    # ``identity_header`` on every outbound call; during tool discovery (no user
+    # in context) the static ``service_credential`` (``Bearer <service token>``)
+    # is used instead so ``list_tools`` passes the downstream auth middleware.
+    forward_identity: bool = False
+    identity_header: str = "X-Forwarded-Authorization"
+    service_credential: str | None = None
 
 
 class McpSseServer(_Strict):
@@ -384,6 +417,32 @@ class AgentConfig(_Strict):
     skills: list[SkillConfig] = Field(default_factory=list)
     memory: MemoryConfig = Field(default_factory=MemoryConfig)
     card: CardConfig | None = None
+    juicefs: "JuiceFSConfig | None" = None
+
+    @model_validator(mode="after")
+    def _desugar_juicefs(self) -> "AgentConfig":
+        """Compile a ``juicefs:`` block into an identity-forwarding MCP server.
+
+        Runs on every validation (server load and admin ``/agents`` load) and is
+        idempotent: it skips when a server with the same name is already present.
+        """
+        if self.juicefs is None:
+            return self
+        # Lazy import breaks the import cycle (binding imports this module for
+        # ``McpStreamableHttpServer``). The forward ref is resolved by
+        # ``config_a2a.config`` at package import time.
+        from config_a2a.juicefs.binding import (  # pylint: disable=import-outside-toplevel
+            compile_juicefs,
+            merge_filters,
+        )
+
+        compiled = compile_juicefs(self.juicefs)
+        if not any(server.name == compiled.name for server in self.tools.mcp_servers):
+            self.tools.mcp_servers.append(compiled)
+        # Fold the juicefs.filters into the agent-wide tools.filters (idempotent
+        # deduplicated union), so they apply uniformly during MCP discovery.
+        self.tools.filters = merge_filters(self.tools.filters, self.juicefs.filters)
+        return self
 
     @model_validator(mode="after")
     def _slug_default_and_shape(self) -> "AgentConfig":
@@ -415,6 +474,7 @@ class ServerConfig(_Strict):
     description: str = ""
 
     server: ServerBindConfig = Field(default_factory=ServerBindConfig)
+    identity: ServerIdentityConfig | None = None
     persistence: PersistenceConfig = Field(default_factory=PersistenceConfig)
     observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
     card: CardConfig = Field(default_factory=CardConfig)
@@ -440,6 +500,36 @@ class ServerConfig(_Strict):
                 agent.authentication = AuthenticationConfig()
         return self
 
+    @model_validator(mode="after")
+    def _compile_juicefs_with_identity(self) -> "ServerConfig":
+        """Recompile each agent's ``juicefs:`` block with the server-wide identity.
+
+        ``AgentConfig._desugar_juicefs`` already produced a baseline (it cannot
+        see ``ServerConfig.identity``, so it uses the default JWT header and no
+        service credential). This server-level pass replaces that compiled server
+        with one that honours ``self.identity``: the configured JWT header is
+        used and the static service token is read for tool discovery. The
+        operation is idempotent (replace, never duplicate).
+        """
+        from config_a2a.juicefs.binding import (  # pylint: disable=import-outside-toplevel
+            compile_juicefs,
+            merge_filters,
+        )
+
+        for agent in self.agents:
+            if agent.juicefs is None:
+                continue
+            compiled = compile_juicefs(agent.juicefs, server_identity=self.identity)
+            servers = agent.tools.mcp_servers
+            for index, server in enumerate(servers):
+                if server.name == compiled.name:
+                    servers[index] = compiled
+                    break
+            else:
+                servers.append(compiled)
+            agent.tools.filters = merge_filters(agent.tools.filters, agent.juicefs.filters)
+        return self
+
 
 __all__ = [
     "AdminConfig",
@@ -459,6 +549,7 @@ __all__ = [
     "HandoffPattern",
     "HandoffTarget",
     "JudgeSubConfig",
+    "JuiceFSConfig",
     "LongTermMemoryConfig",
     "McpServer",
     "McpSseServer",
@@ -482,6 +573,7 @@ __all__ = [
     "RouterSubConfig",
     "ServerBindConfig",
     "ServerConfig",
+    "ServerIdentityConfig",
     "SimplePattern",
     "SkillConfig",
     "ToTPattern",
@@ -490,3 +582,7 @@ __all__ = [
     "WorkingMemoryConfig",
     "slugify",
 ]
+
+# NOTE: the ``AgentConfig.juicefs`` forward reference is resolved by
+# ``config_a2a.config.__init__`` (which imports ``JuiceFSConfig`` and calls
+# ``model_rebuild``) to keep this module free of an import-time cycle.
