@@ -9,6 +9,11 @@ from typing import Any
 from sqlalchemy import JSON, DateTime, Integer, String, Text, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
+# pylint/astroid cannot resolve sqlalchemy.func's dynamic attribute generation, so every
+# func.now() call below is misreported as not-callable. Known false positive, disabled
+# for the rest of this module.
+# pylint: disable=not-callable
+
 
 class Base(DeclarativeBase):
     pass

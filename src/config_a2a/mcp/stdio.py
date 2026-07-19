@@ -36,6 +36,55 @@ class StdioToolDescriptor:
     annotations: dict[str, Any]
 
 
+def build_tool_descriptor(server_name: str, tool: Any) -> StdioToolDescriptor:
+    """Build a :class:`StdioToolDescriptor` from an MCP SDK ``Tool``.
+
+    Shared by every transport (stdio, SSE, streamable-HTTP): the MCP SDK
+    returns the same ``Tool`` shape regardless of how the server was reached.
+    """
+    schema = getattr(tool, "inputSchema", None) or {"type": "object", "properties": {}}
+    annotations_obj = getattr(tool, "annotations", None)
+    annotations_dict: dict[str, Any] = {}
+    if annotations_obj is not None:
+        if isinstance(annotations_obj, dict):
+            annotations_dict = dict(annotations_obj)
+        else:
+            for key in ("destructiveHint", "idempotentHint", "readOnlyHint", "openWorldHint"):
+                value = getattr(annotations_obj, key, None)
+                if value is not None:
+                    annotations_dict[key] = bool(value)
+    return StdioToolDescriptor(
+        qualified_name=f"{server_name}.{tool.name}",
+        raw_name=tool.name,
+        server_name=server_name,
+        description=getattr(tool, "description", "") or "",
+        input_schema=schema if isinstance(schema, dict) else {},
+        annotations=annotations_dict,
+    )
+
+
+def flatten_tool_result(result: Any) -> dict[str, Any]:
+    """Flatten an MCP SDK ``CallToolResult`` into a JSON-serialisable dict (shared by every transport)."""
+    chunks: list[str] = []
+    for item in getattr(result, "content", []) or []:
+        text = getattr(item, "text", None)
+        if text:
+            chunks.append(text)
+    return {"isError": bool(getattr(result, "isError", False)), "text": "\n".join(chunks)}
+
+
+async def list_tools_via_session(server_name: str, session: ClientSession) -> list[StdioToolDescriptor]:
+    """``list_tools`` + descriptor building over an already-open session (shared by every transport)."""
+    response = await session.list_tools()
+    return [build_tool_descriptor(server_name, tool) for tool in response.tools]
+
+
+async def call_tool_via_session(session: ClientSession, tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    """``call_tool`` + result flattening over an already-open session (shared by every transport)."""
+    result = await session.call_tool(tool_name, arguments=arguments)
+    return flatten_tool_result(result)
+
+
 def _scrub_env(extra: dict[str, str]) -> dict[str, str]:
     env: dict[str, str] = {}
     if "PATH" in os.environ:
@@ -58,32 +107,7 @@ async def discover_tools(server: McpStdioServer) -> list[StdioToolDescriptor]:
 
     async def _list() -> list[StdioToolDescriptor]:
         async with _open_session(server) as session:
-            response = await session.list_tools()
-            tools = response.tools
-        out: list[StdioToolDescriptor] = []
-        for tool in tools:
-            schema = getattr(tool, "inputSchema", None) or {"type": "object", "properties": {}}
-            annotations_obj = getattr(tool, "annotations", None)
-            annotations_dict: dict[str, Any] = {}
-            if annotations_obj is not None:
-                if isinstance(annotations_obj, dict):
-                    annotations_dict = dict(annotations_obj)
-                else:
-                    for key in ("destructiveHint", "idempotentHint", "readOnlyHint", "openWorldHint"):
-                        value = getattr(annotations_obj, key, None)
-                        if value is not None:
-                            annotations_dict[key] = bool(value)
-            out.append(
-                StdioToolDescriptor(
-                    qualified_name=f"{server.name}.{tool.name}",
-                    raw_name=tool.name,
-                    server_name=server.name,
-                    description=getattr(tool, "description", "") or "",
-                    input_schema=schema if isinstance(schema, dict) else {},
-                    annotations=annotations_dict,
-                )
-            )
-        return out
+            return await list_tools_via_session(server.name, session)
 
     return await asyncio.wait_for(_list(), timeout=server.discovery_timeout_seconds)
 
@@ -91,14 +115,4 @@ async def discover_tools(server: McpStdioServer) -> list[StdioToolDescriptor]:
 async def call_tool(server: McpStdioServer, tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
     """Invoke ``tool_name`` on ``server`` and return a JSON-serialisable result."""
     async with _open_session(server) as session:
-        result = await session.call_tool(tool_name, arguments=arguments)
-    # The mcp SDK returns a CallToolResult; flatten text content into a single string.
-    chunks: list[str] = []
-    for item in getattr(result, "content", []) or []:
-        text = getattr(item, "text", None)
-        if text:
-            chunks.append(text)
-    return {
-        "isError": bool(getattr(result, "isError", False)),
-        "text": "\n".join(chunks),
-    }
+        return await call_tool_via_session(session, tool_name, arguments)

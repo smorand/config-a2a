@@ -437,11 +437,15 @@ class AgentConfig(_Strict):
         )
 
         compiled = compile_juicefs(self.juicefs)
+        # pylint/astroid mis-infers `self.tools` (a `ToolsConfig`) as the `FieldInfo` from its
+        # `Field(default_factory=...)` declaration, a known limitation with pydantic v2.
+        # pylint: disable=no-member
         if not any(server.name == compiled.name for server in self.tools.mcp_servers):
             self.tools.mcp_servers.append(compiled)
         # Fold the juicefs.filters into the agent-wide tools.filters (idempotent
         # deduplicated union), so they apply uniformly during MCP discovery.
         self.tools.filters = merge_filters(self.tools.filters, self.juicefs.filters)
+        # pylint: enable=no-member
         return self
 
     @model_validator(mode="after")
@@ -483,9 +487,9 @@ class ServerConfig(_Strict):
 
     @model_validator(mode="after")
     def _validate_agents(self) -> "ServerConfig":
-        if not self.admin.enabled and not self.agents:
+        if not self.admin.enabled and not self.agents:  # pylint: disable=no-member
             raise ValueError(
-                "server is inert: admin.enabled=false AND agents=[]; " "enable admin or provide at least one agent"
+                "server is inert: admin.enabled=false AND agents=[]; enable admin or provide at least one agent"
             )
         seen: set[str] = set()
         for agent in self.agents:

@@ -7,7 +7,7 @@ import logging
 from config_a2a.patterns.base import (
     ExecutionContext,
     PatternError,
-    call_llm,
+    call_llm_with_budget,
     emit_status,
     emit_thinking,
 )
@@ -19,8 +19,7 @@ log = logging.getLogger(__name__)
 # Recovery for a model that finishes a turn with no tool call and no text.
 _MAX_EMPTY_RETRIES = 2
 _EMPTY_NUDGE = (
-    "Your previous reply was empty. Using the tool results above, answer the "
-    "user's request now in plain text."
+    "Your previous reply was empty. Using the tool results above, answer the user's request now in plain text."
 )
 _EMPTY_FALLBACK = (
     "I ran the requested tools but the model returned no text answer. "
@@ -48,12 +47,9 @@ async def run_simple(ctx: ExecutionContext) -> None:
     empty_retries = 0
 
     for _ in range(max_loops):
-        if ctx.cancel_event.is_set():
-            raise PatternError("cancelled")
-        response = await call_llm(ctx, messages, tools=ctx.tools)
-        total_tokens += response.usage.input_tokens + response.usage.output_tokens
-        if total_tokens > max_tokens:
-            raise PatternError(f"max_tokens exceeded ({total_tokens} > {max_tokens})")
+        response, total_tokens = await call_llm_with_budget(
+            ctx, messages, total_tokens=total_tokens, max_tokens=max_tokens
+        )
 
         if not response.tool_calls:
             if response.content.strip():

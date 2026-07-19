@@ -10,7 +10,6 @@ from __future__ import annotations
 import json
 import os
 import subprocess  # nosec B404 — gcloud is the supported ADC source on macOS
-from typing import Any
 
 import httpx
 
@@ -21,7 +20,7 @@ from config_a2a.providers.base import (
     ProviderError,
     ToolNameCodec,
 )
-from config_a2a.providers.google import GoogleGeminiProvider
+from config_a2a.providers.google import build_contents, build_generate_content_payload, parse_generate_content_response
 
 
 class VertexGeminiProvider(LlmProvider):
@@ -54,8 +53,8 @@ class VertexGeminiProvider(LlmProvider):
     def _token(self) -> str:
         """Mint an access token. Tries google.auth; falls back to `gcloud`."""
         try:
-            from google.auth import default  # type: ignore[import-not-found]
-            from google.auth.transport.requests import Request  # type: ignore[import-not-found]
+            from google.auth import default  # type: ignore[import-not-found] # pylint: disable=import-error
+            from google.auth.transport.requests import Request  # type: ignore[import-not-found] # pylint: disable=import-error
 
             creds, _ = default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
             creds.refresh(Request())
@@ -73,31 +72,8 @@ class VertexGeminiProvider(LlmProvider):
     async def chat(self, request: ChatRequest) -> ChatResponse:
         # Reuse Google's payload shaping; just change endpoint + auth.
         codec = ToolNameCodec(request.tools)
-        system, contents = GoogleGeminiProvider._to_contents(request.messages, codec)
-        payload: dict[str, Any] = {"contents": contents}
-        if system:
-            payload["systemInstruction"] = {"role": "system", "parts": [{"text": system}]}
-        generation_config: dict[str, Any] = {}
-        if request.temperature is not None:
-            generation_config["temperature"] = request.temperature
-        if request.max_output_tokens is not None:
-            generation_config["maxOutputTokens"] = request.max_output_tokens
-        if generation_config:
-            payload["generationConfig"] = generation_config
-        if request.tools:
-            payload["tools"] = [
-                {
-                    "functionDeclarations": [
-                        {
-                            "name": codec.to_wire(tool.name),
-                            "description": tool.description,
-                            "parameters": tool.parameters,
-                        }
-                        for tool in request.tools
-                    ]
-                }
-            ]
-        payload.update(request.extra)
+        system, contents = build_contents(request.messages, codec)
+        payload = build_generate_content_payload(request, codec, system, contents)
 
         url = (
             f"https://{self._location}-aiplatform.googleapis.com/v1/projects/"
@@ -115,31 +91,7 @@ class VertexGeminiProvider(LlmProvider):
             raise ProviderError(f"vertex transport error: {exc}") from exc
         if response.status_code >= 400:
             raise ProviderError(f"vertex {response.status_code}: {response.text[:500]}")
-        # Re-use Google's parsing by hand-rolling a small shim.
-        data = response.json()
-        text_chunks: list[str] = []
-        from config_a2a.providers.base import ToolCall, TokenUsage  # local to avoid cycles
-
-        tool_calls: list[ToolCall] = []
-        for candidate in data.get("candidates") or []:
-            for part in (candidate.get("content") or {}).get("parts") or []:
-                if "text" in part:
-                    text_chunks.append(part["text"])
-                elif "functionCall" in part:
-                    call = part["functionCall"]
-                    qualified = codec.from_wire(call.get("name", ""))
-                    tool_calls.append(ToolCall(id=qualified, name=qualified, arguments=call.get("args") or {}))
-        usage = data.get("usageMetadata") or {}
-        return ChatResponse(
-            content="".join(text_chunks),
-            tool_calls=tool_calls,
-            usage=TokenUsage(
-                input_tokens=int(usage.get("promptTokenCount", 0) or 0),
-                output_tokens=int(usage.get("candidatesTokenCount", 0) or 0),
-            ),
-            finish_reason="stop",
-            raw=data,
-        )
+        return parse_generate_content_response(response.json(), codec)
 
 
 def build_vertex(

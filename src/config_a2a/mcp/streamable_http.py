@@ -11,7 +11,7 @@ from mcp.client.streamable_http import streamablehttp_client
 
 from config_a2a.config.models import McpStreamableHttpServer
 from config_a2a.identity import current_credential
-from config_a2a.mcp.stdio import StdioToolDescriptor
+from config_a2a.mcp.stdio import StdioToolDescriptor, call_tool_via_session, list_tools_via_session
 
 
 def _request_headers(server: McpStreamableHttpServer, *, discovery: bool) -> dict[str, str]:
@@ -43,40 +43,11 @@ async def _open_session(server: McpStreamableHttpServer, *, discovery: bool = Fa
 async def discover_tools(server: McpStreamableHttpServer) -> list[StdioToolDescriptor]:
     async def _list() -> list[StdioToolDescriptor]:
         async with _open_session(server, discovery=True) as session:
-            response = await session.list_tools()
-        return [_descriptor(server.name, tool) for tool in response.tools]
+            return await list_tools_via_session(server.name, session)
 
     return await asyncio.wait_for(_list(), timeout=15.0)
 
 
 async def call_tool(server: McpStreamableHttpServer, tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
     async with _open_session(server) as session:
-        result = await session.call_tool(tool_name, arguments=arguments)
-    chunks: list[str] = []
-    for item in getattr(result, "content", []) or []:
-        text = getattr(item, "text", None)
-        if text:
-            chunks.append(text)
-    return {"isError": bool(getattr(result, "isError", False)), "text": "\n".join(chunks)}
-
-
-def _descriptor(server_name: str, tool: Any) -> StdioToolDescriptor:
-    schema = getattr(tool, "inputSchema", None) or {"type": "object", "properties": {}}
-    annotations_obj = getattr(tool, "annotations", None)
-    annotations_dict: dict[str, Any] = {}
-    if annotations_obj is not None:
-        if isinstance(annotations_obj, dict):
-            annotations_dict = dict(annotations_obj)
-        else:
-            for key in ("destructiveHint", "idempotentHint", "readOnlyHint", "openWorldHint"):
-                value = getattr(annotations_obj, key, None)
-                if value is not None:
-                    annotations_dict[key] = bool(value)
-    return StdioToolDescriptor(
-        qualified_name=f"{server_name}.{tool.name}",
-        raw_name=tool.name,
-        server_name=server_name,
-        description=getattr(tool, "description", "") or "",
-        input_schema=schema if isinstance(schema, dict) else {},
-        annotations=annotations_dict,
-    )
+        return await call_tool_via_session(session, tool_name, arguments)

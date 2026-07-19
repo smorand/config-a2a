@@ -1,3 +1,9 @@
+# pylint: disable=cyclic-import
+# `patterns/__init__.py` imports this module (to populate its dispatch table), and this module
+# imports back from `config_a2a.patterns` (see the lazy `get_runner` import below) to let a
+# handoff target run through the ordinary pattern dispatch. The runtime cycle is intentionally
+# broken by making that second import function-scoped; pylint's static check still reports the
+# graph edge.
 """Handoff pattern: pick one target agent (local sub-agent or remote A2A URL)."""
 
 from __future__ import annotations

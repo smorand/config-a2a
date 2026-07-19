@@ -10,7 +10,7 @@ from config_a2a.guardrails.anti_loop import is_loop
 from config_a2a.patterns.base import (
     ExecutionContext,
     PatternError,
-    call_llm,
+    call_llm_with_budget,
     emit_status,
     emit_thinking,
 )
@@ -23,6 +23,9 @@ _DEFAULT_REACT_INSTRUCTIONS = (
     "Follow the ReAct loop. For each step, think briefly, then either call a "
     "tool to gather information or produce a final answer when confident. "
     "Avoid repeating the same tool call with the same arguments."
+)
+_REPEATED_ANSWER_NUDGE = (
+    "That answer repeats earlier reasoning. Provide a concise final answer using only what you know."
 )
 
 
@@ -55,24 +58,16 @@ async def run_react(ctx: ExecutionContext) -> None:
     final_text = ""
 
     for iteration in range(max_iter):
-        if ctx.cancel_event.is_set():
-            raise PatternError("cancelled")
-        response = await call_llm(ctx, messages, tools=ctx.tools)
-        total_tokens += response.usage.input_tokens + response.usage.output_tokens
-        if total_tokens > max_tokens:
-            raise PatternError(f"max_tokens exceeded ({total_tokens} > {max_tokens})")
+        response, total_tokens = await call_llm_with_budget(
+            ctx, messages, total_tokens=total_tokens, max_tokens=max_tokens
+        )
 
         if not response.tool_calls:
             final_text = response.content
             if final_text and is_loop(seen_assistant, final_text):
                 # Force a synthesis pass: ask for a different final answer.
                 messages.append(ChatMessage(role="assistant", content=final_text))
-                messages.append(
-                    ChatMessage(
-                        role="user",
-                        content="That answer repeats earlier reasoning. Provide a concise final answer using only what you know.",
-                    )
-                )
+                messages.append(ChatMessage(role="user", content=_REPEATED_ANSWER_NUDGE))
                 seen_assistant.append(final_text)
                 continue
             break

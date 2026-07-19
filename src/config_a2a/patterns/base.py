@@ -105,3 +105,24 @@ async def call_llm(
         max_output_tokens=ctx.config.model.max_output_tokens,
     )
     return await ctx.provider.chat(request)
+
+
+async def call_llm_with_budget(
+    ctx: ExecutionContext,
+    messages: list[ChatMessage],
+    *,
+    total_tokens: int,
+    max_tokens: int,
+) -> tuple[ChatResponse, int]:
+    """``call_llm`` plus the cancel check and running token-budget enforcement shared by every pattern's loop.
+
+    Returns the response and the updated running total; raises ``PatternError``
+    on cancellation or once ``total_tokens`` exceeds ``max_tokens``.
+    """
+    if ctx.cancel_event.is_set():
+        raise PatternError("cancelled")
+    response = await call_llm(ctx, messages, tools=ctx.tools)
+    total_tokens += response.usage.input_tokens + response.usage.output_tokens
+    if total_tokens > max_tokens:
+        raise PatternError(f"max_tokens exceeded ({total_tokens} > {max_tokens})")
+    return response, total_tokens

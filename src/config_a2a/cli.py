@@ -78,9 +78,9 @@ def main() -> None:
     """Console-script entry point."""
     try:
         app()
-    except SystemExit:
-        raise
     except Exception as exc:  # pylint: disable=broad-except
+        # SystemExit (raised by typer/click on --help, normal exit, etc.) is a BaseException,
+        # not an Exception, so it already propagates through this handler untouched.
         typer.echo(f"fatal: {exc}", err=True)
         sys.exit(1)
 
