@@ -34,6 +34,7 @@ class TaskRow(Base):
     agent_name: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
     state: Mapped[str] = mapped_column(String(32), nullable=False, default="TASK_STATE_SUBMITTED")
     status_payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    artifacts: Mapped[list[dict[str, Any]] | None] = mapped_column(JSON, nullable=True, default=list)
     pending_action: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     extra: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(

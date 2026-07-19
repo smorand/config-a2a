@@ -91,7 +91,8 @@ def build_agent_card(
             }
             for skill in agent.skills
         ],
-        "interface": {"transport": "HTTP+JSON", "version": "1.0"},
+        "preferredTransport": "HTTP+JSON",
+        "protocolVersion": "1.0",
     }
     if card_cfg.provider is not None:
         card["provider"] = _provider_dict(card_cfg.provider)

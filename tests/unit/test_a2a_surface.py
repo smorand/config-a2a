@@ -55,6 +55,10 @@ def test_agent_card(client_and_prefix: tuple[TestClient, str]) -> None:
     assert body["name"] == "simple-assistant"
     assert body["capabilities"]["streaming"] is True
     assert body["url"].endswith(prefix)
+    # Standard v1.0 transport-negotiation fields (a2a-sdk's card_resolver relies on these
+    # to build supportedInterfaces; without them it silently assumes legacy JSON-RPC/0.3).
+    assert body["preferredTransport"] == "HTTP+JSON"
+    assert body["protocolVersion"] == "1.0"
 
 
 def test_send_message_completes(client_and_prefix: tuple[TestClient, str]) -> None:
@@ -62,10 +66,12 @@ def test_send_message_completes(client_and_prefix: tuple[TestClient, str]) -> No
     payload = {"message": {"messageId": "m-1", "role": "ROLE_USER", "parts": [{"text": "hello"}]}}
     response = client.post(f"{prefix}/message:send", json=payload)
     assert response.status_code == 200
-    task = response.json()
+    task = response.json()["task"]
     assert task["status"]["state"] == "TASK_STATE_COMPLETED"
     final_msg = task["status"]["message"]
     assert "echo: hello" in final_msg["parts"][0]["text"]
+    assert len(task["artifacts"]) == 1
+    assert "echo: hello" in task["artifacts"][0]["parts"][0]["text"]
 
 
 def test_stream_message_emits_sse(client_and_prefix: tuple[TestClient, str]) -> None:
@@ -77,6 +83,7 @@ def test_stream_message_emits_sse(client_and_prefix: tuple[TestClient, str]) -> 
     body = "".join(chunks)
     assert "event: task" in body
     assert "event: statusUpdate" in body
+    assert "event: artifactUpdate" in body
     blocks = [b for b in body.split("\n\n") if b.strip()]
     final = next(
         json.loads(line[len("data: ") :])
@@ -86,12 +93,24 @@ def test_stream_message_emits_sse(client_and_prefix: tuple[TestClient, str]) -> 
     )
     assert final["statusUpdate"]["status"]["state"] == "TASK_STATE_COMPLETED"
     assert final["statusUpdate"]["final"] is True
+    artifact_event = next(
+        json.loads(line[len("data: ") :])
+        for block in blocks
+        for line in block.splitlines()
+        if line.startswith("data: ") and "artifactUpdate" in line
+    )
+    assert "ping" in artifact_event["artifactUpdate"]["artifact"]["parts"][0]["text"]
+    # artifactUpdate must precede the final statusUpdate (order observed against the
+    # official a2a-sdk reference server during the compliance audit).
+    artifact_index = next(i for i, b in enumerate(blocks) if "artifactUpdate" in b)
+    final_index = next(i for i, b in enumerate(blocks) if "statusUpdate" in b and '"final":true' in b.replace(" ", ""))
+    assert artifact_index < final_index
 
 
 def test_get_and_cancel_task(client_and_prefix: tuple[TestClient, str]) -> None:
     client, prefix = client_and_prefix
     payload = {"message": {"messageId": "m-3", "role": "ROLE_USER", "parts": [{"text": "trace me"}]}}
-    sent = client.post(f"{prefix}/message:send", json=payload).json()
+    sent = client.post(f"{prefix}/message:send", json=payload).json()["task"]
     task_id = sent["id"]
     fetched = client.get(f"{prefix}/tasks/{task_id}").json()
     assert fetched["id"] == task_id
@@ -126,7 +145,7 @@ def test_send_message_with_valid_skill_id(client_and_prefix: tuple[TestClient, s
     }
     response = client.post(f"{prefix}/message:send", json=payload)
     assert response.status_code == 200
-    task = response.json()
+    task = response.json()["task"]
     assert task["status"]["state"] == "TASK_STATE_COMPLETED"
 
 
@@ -156,5 +175,5 @@ def test_send_message_without_skill_id(client_and_prefix: tuple[TestClient, str]
     }
     response = client.post(f"{prefix}/message:send", json=payload)
     assert response.status_code == 200
-    task = response.json()
+    task = response.json()["task"]
     assert task["status"]["state"] == "TASK_STATE_COMPLETED"

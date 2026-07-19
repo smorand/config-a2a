@@ -73,6 +73,39 @@ async def test_persistent_store_roundtrip(migrated_agent: AgentConfig) -> None:
     assert again.pending_action is None
 
 
+async def test_persistent_store_artifact_roundtrip(migrated_agent: AgentConfig) -> None:
+    """append_artifact persists, and get() must read it back (was hardcoded to [] before)."""
+    store: PersistentTaskStore = build_task_store(migrated_agent)
+    record = await store.create()
+    assert record.artifacts == []
+    artifact = {"artifactId": "a-1", "parts": [{"text": "final answer"}]}
+    await store.append_artifact(record.id, artifact)
+    refreshed = await store.get(record.id)
+    assert refreshed is not None
+    assert refreshed.artifacts == [artifact]
+    second_artifact = {"artifactId": "a-2", "parts": [{"text": "more"}]}
+    await store.append_artifact(record.id, second_artifact)
+    refreshed_again = await store.get(record.id)
+    assert refreshed_again is not None
+    assert refreshed_again.artifacts == [artifact, second_artifact]
+
+
+async def test_message_send_artifact_persists_across_http_roundtrip(migrated_agent: AgentConfig) -> None:
+    """POST /message:send then GET /tasks/{id}: the artifact survives the DB round-trip."""
+    store = build_task_store(migrated_agent)
+    runtime = AgentRuntime(migrated_agent, provider=_StubProvider(), tasks=store)
+    client = TestClient(create_app_for_runtime(runtime))
+    assert migrated_agent.slug is not None
+    prefix = f"/agents/{migrated_agent.slug}"
+    sent = client.post(
+        f"{prefix}/message:send",
+        json={"message": {"messageId": "m-1", "role": "ROLE_USER", "parts": [{"text": "hi"}]}},
+    ).json()["task"]
+    assert len(sent["artifacts"]) == 1
+    fetched = client.get(f"{prefix}/tasks/{sent['id']}").json()
+    assert fetched["artifacts"] == sent["artifacts"]
+
+
 async def test_recent_tasks_limit(migrated_agent: AgentConfig) -> None:
     store = build_task_store(migrated_agent)
     for _ in range(3):
@@ -115,7 +148,7 @@ def test_resume_with_taskid_appends_message(tmp_path: Path, migrated_agent: Agen
     first = client.post(
         f"{prefix}/message:send",
         json={"message": {"messageId": "m-1", "role": "ROLE_USER", "parts": [{"text": "hello"}]}},
-    ).json()
+    ).json()["task"]
     task_id = first["id"]
     second = client.post(
         f"{prefix}/message:send",
@@ -127,7 +160,7 @@ def test_resume_with_taskid_appends_message(tmp_path: Path, migrated_agent: Agen
                 "parts": [{"text": "follow-up"}],
             }
         },
-    ).json()
+    ).json()["task"]
     assert second["id"] == task_id
 
 

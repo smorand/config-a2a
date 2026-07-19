@@ -64,7 +64,7 @@ async def _send(
         timeout=httpx.Timeout(120.0),
     )
     response.raise_for_status()
-    return response.json()
+    return response.json()["task"]
 
 
 async def test_memory_carries_a_user_fact_across_two_turns(fresh_db: str) -> None:

@@ -43,6 +43,7 @@ class TaskStore(Protocol):  # pragma: no cover — structural
         clear_pending: bool = ...,
     ) -> None: ...
     async def append_message(self, task_id: str, message: Message) -> None: ...
+    async def append_artifact(self, task_id: str, artifact: dict[str, Any]) -> None: ...
     async def list_recent(self, limit: int = ...) -> list[Any]: ...
     async def history_for_context(self, context_id: str) -> list[Message]: ...
     async def record_step(self, *, task_id: str, kind: str, payload: dict[str, Any], summary: str = ...) -> None: ...
@@ -92,6 +93,11 @@ class InMemoryTaskStore:
         async with self._lock:
             if task_id in self._tasks:
                 self._tasks[task_id].history.append(message)
+
+    async def append_artifact(self, task_id: str, artifact: dict[str, Any]) -> None:
+        async with self._lock:
+            if task_id in self._tasks:
+                self._tasks[task_id].artifacts.append(artifact)
 
     async def list_recent(self, limit: int = 100) -> list[TaskRecord]:
         async with self._lock:

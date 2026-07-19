@@ -178,13 +178,13 @@ def test_runtime_injects_long_term_memory_on_first_turn() -> None:
         json={
             "message": {"messageId": "t1", "role": "ROLE_USER", "parts": [{"text": "My favourite colour is purple"}]}
         },
-    ).json()
+    ).json()["task"]
     assert r1["status"]["state"] == "TASK_STATE_COMPLETED"
 
     r2 = client.post(
         f"{prefix}/message:send",
         json={"message": {"messageId": "t2", "role": "ROLE_USER", "parts": [{"text": "What is my favourite colour?"}]}},
-    ).json()
+    ).json()["task"]
     assert r2["status"]["state"] == "TASK_STATE_COMPLETED"
 
     turn2_primary_call = provider.calls[2]
@@ -203,7 +203,7 @@ def test_runtime_no_harvest_when_disabled() -> None:
     response = client.post(
         f"{prefix}/message:send",
         json={"message": {"messageId": "m", "role": "ROLE_USER", "parts": [{"text": "hi"}]}},
-    ).json()
+    ).json()["task"]
     assert response["status"]["state"] == "TASK_STATE_COMPLETED"
     assert len(provider.calls) == 1
 

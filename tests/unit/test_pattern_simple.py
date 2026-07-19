@@ -68,5 +68,5 @@ def test_simple_pattern_send_endpoint(
         json={"message": {"messageId": "m-2", "role": "ROLE_USER", "parts": [{"text": "salut"}]}},
     )
     assert response.status_code == 200
-    task = response.json()
+    task = response.json()["task"]
     assert task["status"]["state"] == "TASK_STATE_COMPLETED"

@@ -49,9 +49,38 @@ class PatternError(Exception):
 
 
 async def emit_status(
-    ctx: ExecutionContext, state: str, *, text: str | None = None, final: bool = False, metadata: dict | None = None
+    ctx: ExecutionContext,
+    state: str,
+    *,
+    text: str | None = None,
+    final: bool = False,
+    metadata: dict | None = None,
+    emit_artifact_on_complete: bool = True,
 ) -> None:
-    """Helper to push a TaskState update over SSE."""
+    """Helper to push a TaskState update over SSE.
+
+    On TASK_STATE_COMPLETED with text, this also emits (and persists) a proper A2A Artifact
+    *in addition to* status.message, before the final statusUpdate — matching the delivery
+    order (artifactUpdate, then statusUpdate final=true) observed against the official a2a-sdk
+    reference server. status.message keeps carrying the text too: config-a2a's own outbound
+    client and web-a2a both already read it there, and this keeps them working unchanged while
+    a spec-standard peer that only looks at artifacts is now also served correctly.
+    """
+    if state == "TASK_STATE_COMPLETED" and text and emit_artifact_on_complete:
+        artifact = {"artifactId": str(uuid.uuid4()), "parts": [{"text": text}]}
+        await ctx.task_store.append_artifact(ctx.task_id, artifact)
+        await ctx.emitter.emit(
+            {
+                "artifactUpdate": {
+                    "taskId": ctx.task_id,
+                    "contextId": ctx.context_id,
+                    "artifact": artifact,
+                    "append": False,
+                    "lastChunk": True,
+                }
+            },
+            event="artifactUpdate",
+        )
     message = text_message("ROLE_AGENT", text) if text is not None else None
     status = TaskStatus(state=state, message=message)
     await ctx.task_store.update_status(ctx.task_id, status)

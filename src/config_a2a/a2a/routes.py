@@ -149,7 +149,7 @@ def create_router(slug: str) -> APIRouter:
         consumer = asyncio.create_task(drain())
         await asyncio.gather(producer, consumer)
         refreshed = await runtime.tasks.get(record.id) or record
-        return JSONResponse(_task_to_dict(refreshed))
+        return JSONResponse({"task": _task_to_dict(refreshed)})
 
     @router.post("/message:stream", tags=["a2a"], response_model=None)
     async def stream_message(

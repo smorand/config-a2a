@@ -42,6 +42,7 @@ class TaskRepository:
                 agent_name=self._agent_name,
                 state="TASK_STATE_SUBMITTED",
                 status_payload={"state": "TASK_STATE_SUBMITTED"},
+                artifacts=[],
                 pending_action=None,
                 extra={},
                 created_at=now,
@@ -77,6 +78,14 @@ class TaskRepository:
                 row.pending_action = pending_action
             if clear_pending:
                 row.pending_action = None
+
+    async def append_artifact(self, task_id: str, artifact: dict[str, Any]) -> None:
+        async with self._session_factory.begin() as session:
+            row = await session.get(TaskRow, task_id)
+            if row is None or row.agent_slug != self._agent_slug:
+                return
+            # Reassign the whole list (not .append()) so SQLAlchemy detects the JSON mutation.
+            row.artifacts = [*(row.artifacts or []), artifact]
 
     async def append_message(
         self,

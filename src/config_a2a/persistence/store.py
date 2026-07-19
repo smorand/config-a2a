@@ -18,7 +18,7 @@ class _TaskView:
         self.state: str = row.state
         self.status: TaskStatus = TaskStatus.model_validate(row.status_payload)
         self.history: list[Message] = history
-        self.artifacts: list[dict[str, Any]] = []
+        self.artifacts: list[dict[str, Any]] = row.artifacts or []
         self.metadata: dict[str, Any] = row.extra or {}
         self.pending_action: dict[str, Any] | None = row.pending_action
 
@@ -59,6 +59,9 @@ class PersistentTaskStore:
             pending_action=pending_action,
             clear_pending=clear_pending,
         )
+
+    async def append_artifact(self, task_id: str, artifact: dict[str, Any]) -> None:
+        await self._repo.append_artifact(task_id, artifact)
 
     async def append_message(self, task_id: str, message: Message) -> None:
         await self._repo.append_message(

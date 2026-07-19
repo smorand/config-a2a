@@ -72,7 +72,11 @@ async def send_text(
     timeout_seconds: float = 180.0,
 ) -> RemoteAgentResult:
     """Send a single user message to a remote agent and drain the SSE stream."""
-    headers = {"Content-Type": "application/json", "Accept": "text/event-stream"}
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "text/event-stream",
+        "A2A-Version": "1.0",
+    }
     headers.update(_auth_headers(auth))
     payload = {
         "message": {
@@ -100,6 +104,12 @@ async def send_text(
                 raw = parsed
                 if "task" in parsed:
                     task_id = parsed["task"].get("id")
+                artifact_update = parsed.get("artifactUpdate")
+                if artifact_update:
+                    for part in artifact_update.get("artifact", {}).get("parts", []):
+                        text_value = part.get("text")
+                        if text_value:
+                            final_text = text_value
                 update = parsed.get("statusUpdate") or {}
                 status = update.get("status") or {}
                 state = status.get("state")
